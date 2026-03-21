@@ -21,8 +21,5 @@ const sendOTP = async (email, otp, name) => {
 };
 
 module.exports = { sendOTP };
-```
 
-Then in your Render env vars, add your **new** key:
-```
 RESEND_API_KEY = re_your_new_key_here
