@@ -21,25 +21,55 @@ router.post('/register', async (req, res) => {
       return res.status(400).json({ message: 'Required fields missing' });
     }
 
-    const existingUser = await User.findOne({ email });
-    if (existingUser) {
+    let user = await User.findOne({ email });
+
+    // 🔥 If user exists but NOT verified → allow re-register
+    if (user && user.isVerified) {
       return res.status(400).json({ message: 'Email already registered' });
     }
 
     // 🔢 Generate OTP
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
 
-    const user = new User({
-      name,
-      email,
-      password,
-      role: role || 'student',
-      college: college || '',
-      schoolGroup: schoolGroup || '',
-      otp,
-      otpExpiry: new Date(Date.now() + 10 * 60 * 1000),
-    });
+    if (!user) {
+      // ✅ Create new user
+      user = new User({
+        name,
+        email,
+        password,
+        role: role || 'student',
+        college: college || '',
+        schoolGroup: schoolGroup || '',
+      });
+    }
 
+    // 🔁 Update OTP every time
+    user.otp = otp;
+    user.otpExpiry = new Date(Date.now() + 10 * 60 * 1000);
+
+    await user.save();
+
+    // 📩 SEND OTP
+    try {
+      await sendOTP(email, otp, name);
+      console.log("✅ OTP sent successfully");
+    } catch (err) {
+      console.error("❌ OTP EMAIL ERROR:", err);
+
+      // ❗ DON'T BLOCK USER CREATION
+      return res.status(200).json({
+        message: "User created but email failed",
+        debugOtp: otp // 🔥 TEMP (remove later)
+      });
+    }
+
+    res.status(201).json({ message: 'OTP sent to email', email });
+
+  } catch (err) {
+    console.error('❌ REGISTER ERROR:', err);
+    res.status(500).json({ message: err.message || 'Registration failed' });
+  }
+});
     // 🔗 Handle referral linking
     if (joinCode && role === 'student') {
       const ref = await User.findOne({ refCode: joinCode });
