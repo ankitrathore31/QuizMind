@@ -1,25 +1,51 @@
-const { Resend } = require('resend');
-const resend = new Resend(process.env.RESEND_API_KEY);
+const nodemailer = require('nodemailer');
+
+const transporter = nodemailer.createTransport({
+  host: process.env.SMTP_HOST,
+  port: Number(process.env.SMTP_PORT),
+  secure: false,
+  auth: {
+    user: process.env.SMTP_USER,
+    pass: process.env.SMTP_PASS,
+  },
+});
+
+transporter.verify((err, success) => {
+  if (err) {
+    console.error('❌ SMTP ERROR:', err);
+  } else {
+    console.log('✅ SMTP READY');
+  }
+});
 
 const sendOTP = async (email, otp, name) => {
-  const { error } = await resend.emails.send({
-    from: 'QuizMind <onboarding@resend.dev>',
-    to: email,
-    subject: '🔐 Your QuizMind Verification Code',
-    html: `
-      <div style="font-family:sans-serif;max-width:480px;margin:auto;padding:32px;border:1px solid #eee;border-radius:12px">
-        <h2 style="color:#6c47ff">QuizMind</h2>
-        <p>Hi <strong>${name}</strong>,</p>
-        <p>Your email verification code is:</p>
-        <div style="font-size:36px;font-weight:800;letter-spacing:10px;color:#6c47ff;margin:24px 0">${otp}</div>
-        <p style="color:#888;font-size:13px">This code expires in <strong>10 minutes</strong>. Do not share it with anyone.</p>
-      </div>
-    `
-  });
+  try {
+    console.log('📩 Sending OTP to:', email);
 
-  if (error) throw new Error(error.message);
+    const info = await transporter.sendMail({
+      from: `"QuizMind AI" <${process.env.SMTP_USER}>`,
+      to: email,
+      subject: 'Your QuizMind OTP Code',
+      html: `
+        <div style="font-family:Arial,sans-serif;max-width:480px;margin:auto;background:#0A0A0F;padding:40px;border-radius:16px;">
+          <h2 style="color:#7C5CFC;margin-bottom:8px;">QuizMind AI 🚀</h2>
+          <p style="color:#ccc;">Hi <strong>${name || 'User'}</strong>,</p>
+          <p style="color:#ccc;">Your verification code is:</p>
+          <div style="font-size:36px;font-weight:800;letter-spacing:8px;color:#fff;background:rgba(124,92,252,.15);border:1px solid rgba(124,92,252,.3);padding:20px;border-radius:12px;text-align:center;margin:20px 0;">
+            ${otp}
+          </div>
+          <p style="color:#888;font-size:13px;">This code expires in 10 minutes. Do not share it.</p>
+        </div>
+      `
+    });
+
+    console.log('✅ Email sent:', info.response);
+    return true;
+
+  } catch (error) {
+    console.error('❌ EMAIL SEND ERROR:', error);
+    throw error;
+  }
 };
 
 module.exports = { sendOTP };
-
-RESEND_API_KEY = re_your_new_key_here
