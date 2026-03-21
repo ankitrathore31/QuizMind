@@ -23,7 +23,7 @@ router.post('/register', async (req, res) => {
 
     let user = await User.findOne({ email });
 
-    // 🔥 If user exists but NOT verified → allow re-register
+    // ❌ If already verified → block
     if (user && user.isVerified) {
       return res.status(400).json({ message: 'Email already registered' });
     }
@@ -32,7 +32,6 @@ router.post('/register', async (req, res) => {
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
 
     if (!user) {
-      // ✅ Create new user
       user = new User({
         name,
         email,
@@ -43,34 +42,11 @@ router.post('/register', async (req, res) => {
       });
     }
 
-    // 🔁 Update OTP every time
+    // 🔁 Update OTP
     user.otp = otp;
     user.otpExpiry = new Date(Date.now() + 10 * 60 * 1000);
 
-    await user.save();
-
-    // 📩 SEND OTP
-    try {
-      await sendOTP(email, otp, name);
-      console.log("✅ OTP sent successfully");
-    } catch (err) {
-      console.error("❌ OTP EMAIL ERROR:", err);
-
-      // ❗ DON'T BLOCK USER CREATION
-      return res.status(200).json({
-        message: "User created but email failed",
-        debugOtp: otp // 🔥 TEMP (remove later)
-      });
-    }
-
-    res.status(201).json({ message: 'OTP sent to email', email });
-
-  } catch (err) {
-    console.error('❌ REGISTER ERROR:', err);
-    res.status(500).json({ message: err.message || 'Registration failed' });
-  }
-});
-    // 🔗 Handle referral linking
+    // 🔗 Referral linking
     if (joinCode && role === 'student') {
       const ref = await User.findOne({ refCode: joinCode });
       if (ref) {
@@ -82,13 +58,18 @@ router.post('/register', async (req, res) => {
 
     await user.save();
 
-    // 📩 SEND OTP (FIXED)
+    // 📩 Send OTP
     try {
       await sendOTP(email, otp, name);
       console.log("✅ OTP sent successfully");
     } catch (err) {
       console.error("❌ OTP EMAIL ERROR:", err);
-      return res.status(500).json({ message: "Failed to send OTP email" });
+
+      // ⚠️ Don't block registration
+      return res.status(200).json({
+        message: "User created but email failed",
+        debugOtp: otp // 🔥 remove later
+      });
     }
 
     res.status(201).json({ message: 'OTP sent to email', email });
@@ -152,7 +133,6 @@ router.post('/resend-otp', async (req, res) => {
 
     await user.save();
 
-    // 📩 SEND OTP AGAIN (FIXED)
     try {
       await sendOTP(email, user.otp, user.name);
       console.log("✅ OTP resent successfully");
@@ -189,18 +169,6 @@ router.post('/login', async (req, res) => {
       });
     }
 
-    // 🔥 Update streak
-    const today = new Date().toDateString();
-    const last = user.lastActiveDate ? new Date(user.lastActiveDate).toDateString() : null;
-    const yesterday = new Date(Date.now() - 86400000).toDateString();
-
-    if (last === yesterday) user.streak += 1;
-    else if (last !== today) user.streak = 1;
-
-    user.lastActiveDate = new Date();
-
-    await user.save();
-
     const token = signToken(user._id);
 
     res.json({
@@ -219,55 +187,6 @@ router.post('/login', async (req, res) => {
 ========================= */
 router.get('/me', protect, (req, res) => {
   res.json(sanitize(req.user));
-});
-
-/* =========================
-   ONBOARDING
-========================= */
-router.post('/onboarding', protect, async (req, res) => {
-  try {
-    const { class: cls, age, interests } = req.body;
-
-    await User.findByIdAndUpdate(req.user._id, {
-      class: cls,
-      age,
-      interests,
-      onboardingComplete: true,
-    });
-
-    res.json({ message: 'Profile updated' });
-
-  } catch (err) {
-    console.error('❌ ONBOARDING ERROR:', err);
-    res.status(500).json({ message: err.message });
-  }
-});
-
-/* =========================
-   LINK REF
-========================= */
-router.post('/link-ref', protect, async (req, res) => {
-  try {
-    const { refCode } = req.body;
-
-    const ref = await User.findOne({ refCode });
-    if (!ref) {
-      return res.status(404).json({ message: 'Invalid reference code' });
-    }
-
-    const update = {};
-    if (ref.role === 'teacher') update.linkedTeacherId = ref._id;
-    if (ref.role === 'institution') update.linkedInstitutionId = ref._id;
-    if (ref.role === 'parent') update.linkedParentId = ref._id;
-
-    await User.findByIdAndUpdate(req.user._id, update);
-
-    res.json({ message: `Linked to ${ref.role}: ${ref.name}` });
-
-  } catch (err) {
-    console.error('❌ LINK REF ERROR:', err);
-    res.status(500).json({ message: err.message });
-  }
 });
 
 /* =========================
