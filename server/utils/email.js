@@ -22,4 +22,4 @@ const sendOTP = async (email, otp, name) => {
 
 module.exports = { sendOTP };
 
-RESEND_API_KEY = re_your_new_key_here
+RESEND_API_KEY = re_f3dbKbPs_E7zEonuEhsZc3qaEPCcxVL4u
