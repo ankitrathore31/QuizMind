@@ -31,14 +31,12 @@ class StudentController extends Controller
         // Data (replace later with DB queries)
         $recentActivity = $this->getRecentActivity($student);
         $leaderboard    = $this->getLeaderboard();
-        $upcoming       = $this->getUpcoming();
 
         return view('student.dashboard', compact(
             'user',
             'student',
             'recentActivity',
             'leaderboard',
-            'upcoming',
             'showProfileModal'
         ));
     }
@@ -59,31 +57,22 @@ class StudentController extends Controller
 
         $student = $user->getOrCreateStudent();
 
-        // ✅ FULL validation (match modal fields)
+        // Validate — avatar is stored as emoji string, NOT a file upload
         $data = $request->validate([
-            'display_name'      => ['required', 'string', 'max:255'],
-            'age'               => ['required', 'integer', 'min:5', 'max:30'],
-            'class'             => ['required', 'string', 'max:50'],
-            'school_name'       => ['required', 'string', 'max:255'],
-            'bio'               => ['nullable', 'string', 'max:300'],
-            'subjects_interest' => ['nullable', 'array'],
+            'display_name'        => ['required', 'string', 'max:255'],
+            'age'                 => ['required', 'integer', 'min:5', 'max:30'],
+            'class'               => ['required', 'string', 'max:50'],
+            'school_name'         => ['required', 'string', 'max:255'],
+            'bio'                 => ['nullable', 'string', 'max:300'],
+            'subjects_interest'   => ['nullable', 'array'],
             'subjects_interest.*' => ['string'],
-            'avatar'            => ['nullable', 'image', 'max:2048'],
+            'avatar'              => ['nullable', 'string', 'max:10'],  // emoji string
         ]);
 
-        // ✅ Avatar upload (file-based if used later)
-        if ($request->hasFile('avatar')) {
-            if (!empty($student->avatar)) {
-                Storage::disk('public')->delete($student->avatar);
-            }
-
-            $data['avatar'] = $request->file('avatar')->store('avatars', 'public');
-        }
-
-        // ✅ Store JSON properly
+        // Store subjects properly
         $data['subjects_interest'] = $data['subjects_interest'] ?? [];
 
-        // ✅ Mark profile complete
+        // Mark profile complete
         $data['is_profile_complete'] = true;
 
         $student->update($data);
@@ -93,11 +82,9 @@ class StudentController extends Controller
             'message' => 'Profile saved! Welcome to QuizMind 🎉',
             'student' => [
                 'display_name' => $student->display_name,
-                'avatar' => $student->avatar
-                    ? asset('storage/' . $student->avatar)
-                    : null,
-                'level' => $student->level,
-                'level_title' => $student->level_title,
+                'avatar'       => $student->avatar,
+                'level'        => $student->level,
+                'level_title'  => $student->level_title,
             ],
         ]);
     }
@@ -131,7 +118,7 @@ class StudentController extends Controller
     }
 
     /**
-     * Dummy Recent Activity (replace with DB)
+     * Recent Activity (replace with DB later)
      */
     private function getRecentActivity(Student $student): array
     {
@@ -164,7 +151,7 @@ class StudentController extends Controller
     }
 
     /**
-     * Dummy Leaderboard (replace with DB)
+     * Leaderboard (replace with DB later)
      */
     private function getLeaderboard(): array
     {
@@ -174,18 +161,6 @@ class StudentController extends Controller
             ['name' => 'Meera R.',  'level' => 21, 'xp' => 4200, 'streak' => 9,  'avatar' => null],
             ['name' => 'Dev P.',    'level' => 19, 'xp' => 3900, 'streak' => 22, 'avatar' => null],
             ['name' => 'Sneha T.',  'level' => 18, 'xp' => 3650, 'streak' => 7,  'avatar' => null],
-        ];
-    }
-
-    /**
-     * Dummy Upcoming Events
-     */
-    private function getUpcoming(): array
-    {
-        return [
-            ['type' => 'quiz',   'name' => 'Physics Chapter 5',   'time' => 'Today 4:00 PM',  'icon' => '⚡'],
-            ['type' => 'battle', 'name' => 'Math Battle — Open', 'time' => 'Today 6:00 PM',  'icon' => '⚔️'],
-            ['type' => 'quiz',   'name' => 'Chemistry Mock Test', 'time' => 'Tomorrow 10 AM', 'icon' => '🧪'],
         ];
     }
 }

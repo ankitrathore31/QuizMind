@@ -28,6 +28,7 @@ class QuizResult extends Model
 
     protected $casts = [
         'answer_log' => 'array',
+        'time_taken' => 'integer',
     ];
 
     public function user()

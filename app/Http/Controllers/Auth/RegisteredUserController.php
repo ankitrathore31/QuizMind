@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
+use App\Models\Institution;
 use App\Models\User;
 use Illuminate\Auth\Events\Registered;
 use Illuminate\Http\RedirectResponse;
@@ -12,6 +13,7 @@ use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\Rules;
 use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
+use Illuminate\Support\Str;
 
 class RegisteredUserController extends Controller
 {
@@ -48,7 +50,6 @@ class RegisteredUserController extends Controller
             'ref_code' => $data['ref_code'] ?? null,
         ]);
 
-        // ✅ IMPORTANT: Create student if role = student
         if ($user->role === 'student') {
             $user->student()->create([
                 'level' => 1,
@@ -65,10 +66,27 @@ class RegisteredUserController extends Controller
             ]);
         }
 
+        if ($user->role === 'institution') {
+
+            $collegeName = $data['college'] ?? $user->name;
+
+            // Generate code
+            $prefix = strtoupper(substr(preg_replace('/[^A-Za-z]/', '', $collegeName), 0, 3));
+            $random = strtoupper(Str::random(3)) . rand(100, 999);
+            $code = $prefix . $random;
+
+            Institution::create([
+                'user_id' => $user->id,
+                'name'    => $collegeName,
+                'code'    => $code,
+                'email'   => $user->email,
+            ]);
+        }
+
         Auth::login($user);
         $request->session()->regenerate();
 
-        return redirect()->route('dashboard')
-            ->with('status', 'Welcome to QuizMind, ' . $user->name . '! 🚀');
+        return redirect()->back()
+            ->with('status', 'Register Successfully Please login, ' . $user->name . '! 🚀');
     }
 }

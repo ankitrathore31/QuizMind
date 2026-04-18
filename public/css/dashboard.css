@@ -91,20 +91,7 @@ body {
 /* ══════════════════════════════════════
    NAVBAR
 ══════════════════════════════════════ */
-.qm-navbar {
-    position:           sticky;
-    top:                0;
-    z-index:            100;
-    display:            flex;
-    align-items:        center;
-    gap:                6px;
-    padding:            0 24px;
-    height:             64px;
-    background:         rgba(8, 8, 15, 0.88);
-    backdrop-filter:    blur(24px);
-    -webkit-backdrop-filter: blur(24px);
-    border-bottom:      1px solid var(--border);
-}
+
 
 .nav-brand {
     font-family:    var(--fh);
@@ -1138,7 +1125,7 @@ footer { border-top: 1px solid var(--border); padding: 24px; text-align: center;
     .form-row                { grid-template-columns: 1fr; }
     .mcq-options-grid        { grid-template-columns: 1fr; }
     .main-content            { padding: 16px 14px 50px; }
-    .qm-navbar               { gap: 3px; padding: 0 12px; overflow-x: auto; }
+    /* .qm-navbar               { gap: 3px; padding: 0 12px; overflow-x: auto; } */
     .tabs                    { flex-wrap: wrap; }
     .hero-stats              { gap: 20px; }
 }

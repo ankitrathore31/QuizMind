@@ -307,7 +307,7 @@
                             <div class="role-section">
                                 <span class="field-label" style="display:block;margin-bottom:10px;">I am a</span>
                                 <div class="role-grid">
-                                    @foreach ([['student', '👨‍🎓', 'Student'], ['teacher', '👨‍🏫', 'Teacher'], ['institution', '🏛️', 'Institution'], ['parent', '👨‍👩‍👧', 'Parent']] as [$rid, $rico, $rname])
+                                    @foreach ([['student', '👨‍🎓', 'Student'], ['institution', '🏛️', 'Institution'], ['parent', '👨‍👩‍👧', 'Parent']] as [$rid, $rico, $rname])
                                         <button type="button"
                                             class="role-btn {{ old('role', 'student') === $rid ? 'role-active' : '' }}"
                                             data-role="{{ $rid }}" onclick="selectRole(this)">

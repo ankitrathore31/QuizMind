@@ -30,6 +30,15 @@ class User extends Authenticatable
         ];
     }
 
+    protected $fillable = [
+        'name',
+        'email',
+        'password',
+        'role',
+        'college',
+        'ref_code',
+    ];
+
     public function student()
     {
         return $this->hasOne(Student::class);
