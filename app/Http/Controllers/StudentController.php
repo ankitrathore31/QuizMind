@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\QuizResult;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
@@ -32,7 +33,10 @@ class StudentController extends Controller
         $leaderboard    = $this->getLeaderboard();
 
         return view('student.dashboard', compact(
-            'user', 'student', 'recentActivity', 'leaderboard'
+            'user',
+            'student',
+            'recentActivity',
+            'leaderboard'
         ));
     }
 
@@ -158,7 +162,7 @@ class StudentController extends Controller
     {
         $user = Auth::user();
         $student = $user->getOrCreateStudent();
-        return view('student.profile.delete-account',compact('student'));
+        return view('student.profile.delete-account', compact('student'));
     }
 
     // ── Delete Account (DELETE) ───────────────────────────
@@ -190,21 +194,54 @@ class StudentController extends Controller
 
     private function getRecentActivity(Student $student): array
     {
-        return [
-            ['type' => 'quiz',   'subject' => 'Mathematics',      'score' => 92, 'time' => '2 hours ago',  'xp' => 120, 'icon' => '🧮'],
-            ['type' => 'battle', 'subject' => 'Science vs @alice', 'score' => 78, 'time' => 'Yesterday',    'xp' => 85,  'icon' => '⚔️'],
-            ['type' => 'quiz',   'subject' => 'History',           'score' => 65, 'time' => '2 days ago',   'xp' => 60,  'icon' => '📜'],
+        $results = QuizResult::where('user_id', $student->user_id)
+            ->latest()
+            ->take(5)
+            ->get();
+
+        $iconMap = [
+            'Mathematics'  => '🧮',
+            'Physics'      => '⚛️',
+            'Chemistry'    => '🧪',
+            'Biology'      => '🧬',
+            'History'      => '📜',
+            'Geography'    => '🌍',
+            'English'      => '📖',
+            'Computer Sci' => '💻',
+            'Economics'    => '📊',
+            'default'      => '📝',
         ];
+
+        return $results->map(function ($r) use ($iconMap) {
+            $icon = $iconMap[$r->subject] ?? $iconMap['default'];
+            if ($r->type !== 'solo') $icon = '⚔️';
+
+            return [
+                'type'    => $r->type,
+                'subject' => $r->subject . ($r->topic ? " · {$r->topic}" : ''),
+                'score'   => (int) $r->accuracy,
+                'time'    => $r->created_at->diffForHumans(),
+                'xp'      => $r->xp_earned,
+                'icon'    => $icon,
+            ];
+        })->toArray();
     }
 
     private function getLeaderboard(): array
     {
-        return [
-            ['name' => 'Priya S.',  'level' => 24, 'xp' => 4820, 'streak' => 18, 'avatar' => null],
-            ['name' => 'Arjun K.',  'level' => 22, 'xp' => 4410, 'streak' => 12, 'avatar' => null],
-            ['name' => 'Meera R.',  'level' => 21, 'xp' => 4200, 'streak' => 9,  'avatar' => null],
-            ['name' => 'Dev P.',    'level' => 19, 'xp' => 3900, 'streak' => 22, 'avatar' => null],
-            ['name' => 'Sneha T.',  'level' => 18, 'xp' => 3650, 'streak' => 7,  'avatar' => null],
-        ];
+        return Student::with('user')
+            ->where('is_profile_complete', true)
+            ->orderByDesc('xp')
+            ->orderByDesc('level')
+            ->take(5)
+            ->get()
+            ->map(fn($s) => [
+                'name'   => $s->display_name ?: ($s->user->name ?? 'Unknown'),
+                'level'  => $s->level,
+                'xp'     => $s->xp,
+                'streak' => $s->streak,
+                'avatar' => $s->avatar,
+            ])
+            ->toArray();
     }
 }

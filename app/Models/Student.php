@@ -37,7 +37,7 @@ class Student extends Model
         'subjects_interest'  => 'array',
         'badges'             => 'array',
         'streak_last_date'   => 'date:Y-m-d',   // store as plain date string — no timezone drift
-        'is_profile_complete'=> 'boolean',
+        'is_profile_complete' => 'boolean',
     ];
 
     // ── Relationships ─────────────────────────────────────
@@ -46,16 +46,10 @@ class Student extends Model
         return $this->belongsTo(User::class);
     }
 
-    // ── XP helpers ────────────────────────────────────────
-
-    /**
-     * XP required to complete the CURRENT level.
-     * Named xpToNextLevel (camelCase) so the blade `$student->xpToNextLevel` works.
-     * We do NOT override the DB column accessor — use a different name.
-     */
     public function getXpToNextLevelAttribute(): int
     {
-        return (int) (100 * pow($this->level, 1.5));
+        return 100 + (150 * ($this->level - 1));
+        // L1=100, L2=250, L3=400, L4=550, L5=700 …
     }
 
     /** XP progress percentage within current level */
@@ -99,19 +93,13 @@ class Student extends Model
         return $battles > 0 ? (int) round(($this->total_battles_won / $battles) * 100) : 0;
     }
 
-    // ── XP & levelling ────────────────────────────────────
-
-    /**
-     * Add XP and handle level-ups correctly.
-     * Uses a local variable so the accessor isn't re-read mid-loop after level changes.
-     */
+    
     public function addXp(int $amount): void
     {
         $this->xp += $amount;
 
-        // Level up loop — recalculate threshold after each level-up
         while (true) {
-            $needed = (int) (100 * pow($this->level, 1.5));
+            $needed = 100 + (150 * ($this->level - 1));
             if ($this->xp < $needed) break;
             $this->xp -= $needed;
             $this->level++;
@@ -120,14 +108,7 @@ class Student extends Model
         $this->save();
     }
 
-    // ── Streak (FIXED) ────────────────────────────────────
-
-    /**
-     * Call once per dashboard visit.
-     *
-     * FIX: compare plain Y-m-d strings instead of Carbon objects to avoid
-     * any timezone/cast drift that was resetting the streak to 1 every day.
-     */
+  
     public function updateStreak(): void
     {
         // Use app timezone-aware "today" string
