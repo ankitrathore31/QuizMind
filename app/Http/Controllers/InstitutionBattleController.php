@@ -2,132 +2,85 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\BattleRoom;
-use App\Models\BattleParticipant;
-use App\Models\BattleQuestionAnswer;
-use App\Models\InstitutionBattle;
-use App\Models\InstitutionBattleParticipant;
+use App\Events\InstitutionAnswerSubmitted;
+use App\Events\InstitutionBattleCountdownUpdated;
+use App\Events\InstitutionBattleFinished;
+use App\Events\InstitutionBattleLobbyUpdated;
+use App\Events\InstitutionBattleRegistrationClosed;
+use App\Events\InstitutionBattleStarted;
+use App\Events\InstitutionBattleViolation;
+use App\Events\InstitutionNextQuestion;
 use App\Models\Institution;
+use App\Models\InstitutionBattle;
+use App\Models\InstitutionBattleHistory;
+use App\Models\InstitutionBattleParticipant;
+use App\Models\InstitutionBattleQuestionAnswer;
 use App\Models\Quiz;
-use App\Models\Student;
+use App\Models\QuizResult;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Str;
 
 class InstitutionBattleController extends Controller
 {
-    // ── Institution Dashboard ──────────────────────────────────────────────
-    public function dashboard()
+
+    public function setup(Request $request)
     {
         $user        = Auth::user();
-        $institution = $user->institution;
+        $quizId      = $request->query('quizId');
+        $institution = $this->resolveInstitution($user);
+        $quizzes     = Quiz::where('user_id', $user->id)->latest()->get();
+        $quiz        = $quizId ? Quiz::find($quizId) : null;
 
-        if (!$institution) {
-            return redirect()->route('institution.register');
-        }
-
-        // Students linked to institution
-        $students = Student::whereHas('user', fn($q) => $q->where('institution_id', $institution->id))
-            ->with('user')
-            ->get();
-
-        $topStudents = $students->sortByDesc('xp')->take(5);
-
-        $stats = [
-            'total_students'  => $students->count(),
-            'total_quizzes'   => $students->sum('total_quizzes'),
-            'avg_accuracy'    => $students->count() > 0 ? round($students->avg('accuracy')) : 0,
-            'top_student_name'=> $topStudents->first()?->display_name ?? $topStudents->first()?->user->name ?? '—',
-        ];
-
-        $activeBattles = InstitutionBattle::where('host_institution_id', $institution->id)
-            ->whereIn('status', ['waiting', 'in_progress'])
-            ->withCount('participants')
-            ->latest()
-            ->take(5)
-            ->get();
-
-        $savedQuizzes = Quiz::where('user_id', $user->id)->latest()->take(20)->get();
-
-        return view('institution.dashboard', compact(
-            'institution', 'students', 'topStudents', 'stats', 'activeBattles', 'savedQuizzes'
-        ));
+        return view('institution.battle.setup', compact('quiz', 'quizzes', 'institution', 'user'));
     }
 
-    // ── Create Institution Battle ──────────────────────────────────────────
     public function createBattle(Request $request): JsonResponse
     {
         $request->validate([
-            'quiz_id'           => 'required|integer|exists:quizzes,id',
-            'institution_count' => 'required|integer|between:2,4',
-            'institution_names' => 'required|array|min:1|max:3',
-            'institution_names.*' => 'required|string|max:100',
-            'student_limit'     => 'integer|min:5|max:500',
-            'question_timer'    => 'integer|between:10,60',
-            'anti_cheat'        => 'boolean',
-            'scheduled_at'      => 'nullable|date|after:now',
+            'quiz_id'                  => 'required|integer|exists:quizzes,id',
+            'battle_type'              => 'required|in:2school,3school',
+            'question_timer'           => 'nullable|integer|between:10,60',
+            'anti_cheat'               => 'nullable|boolean',
+            // 'students_per_institution' => 'nullable|integer|in:20,50,70,100,150,250',
         ]);
 
-        $user = Auth::user();
-        $institution = $user->institution;
-        $quiz = Quiz::find($request->quiz_id);
+        $quiz = Quiz::where('id', $request->quiz_id)
+            ->where('user_id', Auth::id())
+            ->first();
 
-        if (!$quiz || empty($quiz->questions)) {
-            return response()->json(['success' => false, 'message' => 'Quiz not found or has no questions.']);
+        if (!$quiz) {
+            return response()->json(['success' => false, 'message' => 'Quiz not found.'], 404);
         }
+
+        $user        = Auth::user();
+        $hostInst    = $this->resolveInstitution($user);
+        $hostInstId  = $hostInst?->id;
+
+        $participatingIds = $hostInstId ? [$hostInstId] : [];
 
         DB::beginTransaction();
         try {
             $battle = InstitutionBattle::create([
-                'code'                  => $this->generateCode(),
-                'host_institution_id'   => $institution->id,
-                'quiz_id'               => $quiz->id,
-                'status'                => 'waiting',
-                'institution_count'     => $request->institution_count,
-                'student_limit'         => $request->student_limit ?? 50,
-                'question_timer'        => $request->question_timer ?? 20,
-                'total_questions'       => count($quiz->questions),
-                'anti_cheat'            => $request->input('anti_cheat', true),
-                'scheduled_at'          => $request->scheduled_at,
+                'institution_id'             => $hostInstId,
+                'created_by'                 => Auth::id(),
+                'quiz_id'                    => $quiz->id,
+                'code'                       => InstitutionBattle::generateCode(),
+                'status'                     => 'setup',
+                'battle_type'                => $request->battle_type,
+                'participating_institutions' => $participatingIds,
+                'question_timer'             => $request->question_timer ?? 20,
+                'total_questions'            => count($quiz->questions ?? []),
+                'anti_cheat'                 => $request->input('anti_cheat', true),
             ]);
-
-            // Create host institution entry
-            $hostEntry = InstitutionBattleParticipant::create([
-                'battle_id'    => $battle->id,
-                'institution_id' => $institution->id,
-                'name'         => $institution->name,
-                'student_code' => $this->generateStudentCode(),
-                'is_host'      => true,
-                'total_score'  => 0,
-            ]);
-
-            $institutionCodes = [[
-                'name' => $institution->name . ' (Your Institution)',
-                'code' => $hostEntry->student_code,
-            ]];
-
-            // Create guest institution entries
-            foreach ($request->institution_names as $name) {
-                $entry = InstitutionBattleParticipant::create([
-                    'battle_id'    => $battle->id,
-                    'institution_id' => null,
-                    'name'         => $name,
-                    'student_code' => $this->generateStudentCode(),
-                    'is_host'      => false,
-                    'total_score'  => 0,
-                ]);
-                $institutionCodes[] = ['name' => $name, 'code' => $entry->student_code];
-            }
 
             DB::commit();
 
             return response()->json([
-                'success'          => true,
-                'roomCode'         => $battle->code,
-                'manageUrl'        => route('institution.battle.manage', $battle->code),
-                'institutionCodes' => $institutionCodes,
+                'success'     => true,
+                'battleCode'  => $battle->code,
+                'redirectUrl' => route('institution.battle.setup-page', $battle->code),
             ]);
         } catch (\Throwable $e) {
             DB::rollBack();
@@ -135,99 +88,359 @@ class InstitutionBattleController extends Controller
         }
     }
 
-    // ── Manage page ────────────────────────────────────────────────────────
-    public function manage(string $code)
+    public function setupPage(string $code)
     {
-        $user        = Auth::user();
-        $institution = $user->institution;
-
-        $room = InstitutionBattle::where('code', $code)
-            ->with(['institutionParticipants', 'quiz', 'participants.user'])
+        $user   = Auth::user();
+        $battle = InstitutionBattle::where('code', $code)
+            ->with(['quiz', 'creator', 'institution', 'participants.user', 'participants.institution'])
             ->first();
 
-        if (!$room || $room->host_institution_id !== $institution->id) {
-            return redirect()->route('institution.dashboard')->with('error', 'Battle not found.');
+        if (!$battle) {
+            return redirect()->route('institution.battle.join.page')->with('error', 'Battle not found.');
         }
 
-        if ($room->status === 'finished') {
-            return redirect()->route('institution.battle.results', $room->code);
+        if ($battle->created_by !== Auth::id()) {
+            $institution = $this->resolveInstitution($user);
+            if (
+                $institution &&
+                in_array($institution->id, array_filter($battle->participating_institutions ?? []))
+            ) {
+                return view('institution.battle.setup-page', compact('battle', 'institution', 'user'));
+            }
+            return redirect()->route('institution.battle.arena', $battle->code);
         }
 
-        $violations = DB::table('battle_violations')
-            ->where('battle_id', $room->id)
-            ->join('users', 'battle_violations.user_id', '=', 'users.id')
-            ->select('users.name', 'battle_violations.type', 'battle_violations.disqualified')
-            ->latest()
-            ->take(20)
-            ->get()
-            ->toArray();
+        if ($battle->isFinished()) {
+            return redirect()->route('institution.battle.results', $battle->code);
+        }
 
-        $room->violations = $violations;
+        if (in_array($battle->status, ['in_progress', 'countdown'])) {
+            return redirect()->route('institution.battle.arena', $battle->code);
+        }
 
-        return view('institution.battle.manage', compact('room'));
+        $institution = $this->resolveInstitution($user) ?? $battle->institution;
+
+        return view('institution.battle.setup-page', compact(
+            'battle',
+            'institution',
+            'user'
+        ));
     }
 
-    // ── Student joins via institution code ────────────────────────────────
-    public function joinViaCode(Request $request): JsonResponse
+    public function lookupBattle(Request $request): JsonResponse
     {
-        $request->validate(['student_code' => 'required|string']);
+        $request->validate(['code' => 'required|string|min:4|max:30']);
 
-        $code = strtoupper($request->student_code);
-        $instParticipant = InstitutionBattleParticipant::where('student_code', $code)->first();
+        $raw        = strtoupper(trim($request->code));
+        $masterCode = InstitutionBattle::resolveMasterCode($raw);
 
-        if (!$instParticipant) {
-            return response()->json(['success' => false, 'message' => 'Invalid student code.']);
+        $battle = InstitutionBattle::where('code', $masterCode)
+            ->with(['quiz', 'creator', 'institution'])
+            ->first();
+
+        if (!$battle) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Battle not found. Please check the code and try again.',
+            ]);
         }
 
-        $battle = $instParticipant->battle;
+        if ($battle->isFinished()) {
+            return response()->json(['success' => false, 'message' => 'This battle has already ended.']);
+        }
 
-        if (!$battle || $battle->status === 'finished') {
-            return response()->json(['success' => false, 'message' => 'Battle not found or already finished.']);
+        if (in_array($battle->status, ['in_progress', 'countdown'])) {
+            return response()->json(['success' => false, 'message' => 'This battle has already started.']);
+        }
+
+        if ($raw === $masterCode) {
+            return response()->json([
+                'success' => false,
+                'message' => 'That is the host code. Use the institution invite code (e.g. ' . $masterCode . '-S2X9).',
+            ]);
+        }
+
+        $suffixes  = InstitutionBattle::institutionSubSuffixes();
+        $validCode = false;
+        foreach ($suffixes as $suffix) {
+            if ($raw === $masterCode . '-' . $suffix) {
+                $validCode = true;
+                break;
+            }
+        }
+
+        if (!$validCode) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Invalid institution code. Make sure you are using the code ending in -S2X9 or -S3Y8, not a student code.',
+            ]);
+        }
+
+        $participating = $battle->participating_institutions ?? [];
+        $totalSlots    = $battle->battle_type === '3school' ? 3 : 2;
+        $slots         = [];
+
+        for ($i = 0; $i < $totalSlots; $i++) {
+            $instId      = $participating[$i] ?? null;
+            $slots[$i + 1] = $instId ? (Institution::find($instId)?->name ?? 'Unknown') : null;
+        }
+
+        return response()->json([
+            'success'         => true,
+            'quizTitle'       => $battle->quiz?->title ?? 'Untitled Quiz',
+            'subject'         => $battle->quiz?->subject ?? null,
+            'totalQuestions'  => $battle->total_questions,
+            'questionTimer'   => $battle->question_timer,
+            'battleType'      => $battle->battle_type,
+            'status'          => $battle->status,
+            'hostInstitution' => optional($battle->institution)->name
+                ?? optional($battle->creator)->name
+                ?? 'Host',
+            'slots'           => $slots,
+        ]);
+    }
+
+    public function institutionJoinPage(Request $request)
+    {
+        $code = $request->query('code');
+        return view('institution.battle.join', compact('code'));
+    }
+
+    public function institutionJoin(Request $request): JsonResponse
+    {
+        $request->validate(['code' => 'required|string|min:4|max:30']);
+
+        $raw        = strtoupper(trim($request->code));
+        $masterCode = InstitutionBattle::resolveMasterCode($raw);
+
+        $battle = InstitutionBattle::where('code', $masterCode)->first();
+
+        if (!$battle) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Battle not found. Please check the code and try again.',
+            ]);
+        }
+
+        if ($battle->isFinished()) {
+            return response()->json(['success' => false, 'message' => 'This battle has already ended.']);
+        }
+
+        if (in_array($battle->status, ['in_progress', 'countdown'])) {
+            return response()->json(['success' => false, 'message' => 'This battle has already started.']);
+        }
+
+        $suffixes   = InstitutionBattle::institutionSubSuffixes();
+        $schoolSlot = null;
+
+        foreach ($suffixes as $idx => $suffix) {
+            if ($raw === $masterCode . '-' . $suffix) {
+                $schoolSlot = $idx + 2;
+                break;
+            }
+        }
+
+        if ($raw === $masterCode) {
+            return response()->json([
+                'success' => false,
+                'message' => 'That is the host code. Please use the institution invite code (e.g. ' . $masterCode . '-S2X9).',
+            ]);
+        }
+
+        if ($schoolSlot === null) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Invalid institution code. Make sure you are using the code that ends in -S2X9 or -S3Y8, not a student code.',
+            ]);
+        }
+
+        $user      = Auth::user();
+        $adminInst = $this->resolveInstitution($user);
+
+        if (!$adminInst) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Your account is not linked to an institution. Please contact support.',
+            ]);
+        }
+
+        $slotIndex     = $schoolSlot - 1;
+        $participating = $battle->participating_institutions ?? [];
+
+        if (in_array($adminInst->id, $participating)) {
+            $existingSlot = array_search($adminInst->id, $participating) + 1;
+            return response()->json([
+                'success'         => true,
+                'alreadyJoined'   => true,
+                'institutionName' => $adminInst->name,
+                'studentCode'     => $battle->studentCodeForSlot($existingSlot),
+                'lobbyUrl'        => route('institution.battle.setup-page', $battle->code),
+            ]);
+        }
+
+        if (!empty($participating[$slotIndex])) {
+            return response()->json([
+                'success' => false,
+                'message' => 'School slot ' . $schoolSlot . ' is already taken by another institution.',
+            ]);
+        }
+
+        $totalSlots = $battle->battle_type === '3school' ? 3 : 2;
+        while (count($participating) < $totalSlots) {
+            $participating[] = null;
+        }
+        $participating[$slotIndex] = $adminInst->id;
+
+        $battle->update(['participating_institutions' => $participating]);
+
+        $studentCode = $battle->studentCodeForSlot($schoolSlot);
+
+        $this->broadcastLobby($battle->fresh(['participants.user', 'participants.institution']));
+
+        return response()->json([
+            'success'         => true,
+            'institutionName' => $adminInst->name,
+            'studentCode'     => $studentCode,
+            'schoolSlot'      => $schoolSlot,
+            'lobbyUrl'        => route('institution.battle.setup-page', $battle->code),
+        ]);
+    }
+
+    public function joinBattle(Request $request): JsonResponse
+    {
+        $request->validate(['code' => 'required|string|min:4|max:30']);
+
+        $raw        = strtoupper(trim($request->code));
+        $masterCode = InstitutionBattle::resolveMasterCode($raw);
+
+        $battle = InstitutionBattle::where('code', $masterCode)
+            ->with('participants')
+            ->first();
+
+        if (!$battle) {
+            return response()->json(['success' => false, 'message' => 'Battle not found.']);
+        }
+
+        if ($battle->created_by === Auth::id()) {
+            return response()->json([
+                'success'     => true,
+                'redirectUrl' => route('institution.battle.setup-page', $battle->code),
+            ]);
+        }
+
+        if ($battle->isFinished()) {
+            return response()->json(['success' => false, 'message' => 'This battle has already ended.']);
+        }
+
+        $schoolSlot = $battle->resolveStudentSlot($raw);
+
+        if ($schoolSlot === null) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Invalid student code. Make sure you use the code your admin shared (e.g. JICR9XHV-STU2).',
+            ]);
+        }
+
+        $participating = $battle->participating_institutions ?? [];
+        $instId        = $participating[$schoolSlot - 1] ?? null;
+
+        if (!$instId) {
+            return response()->json([
+                'success' => false,
+                'message' => "School {$schoolSlot} hasn't joined yet. Ask your admin to join first.",
+            ]);
+        }
+
+        $user = Auth::user();
+
+        if ($battle->hasParticipant($user->id)) {
+            return response()->json([
+                'success'     => true,
+                'redirectUrl' => route('institution.battle.arena', $battle->code),
+                'battleInfo'  => $this->buildBattleInfo($battle, $instId),
+            ]);
+        }
+
+        if ($battle->students_per_institution) {
+            $currentCount = InstitutionBattleParticipant::where('battle_id', $battle->id)
+                ->where('institution_id', $instId)
+                ->count();
+
+            if ($currentCount >= $battle->students_per_institution) {
+                return response()->json([
+                    'success' => false,
+                    'message' => "School {$schoolSlot} has reached its student limit ({$battle->students_per_institution}).",
+                ]);
+            }
+        }
+
+        InstitutionBattleParticipant::create([
+            'battle_id'      => $battle->id,
+            'user_id'        => $user->id,
+            'institution_id' => $instId,
+            'status'         => 'registered',
+        ]);
+
+        $this->broadcastLobby($battle->fresh(['participants.user', 'participants.institution']));
+
+        return response()->json([
+            'success'     => true,
+            'redirectUrl' => route('institution.battle.arena', $battle->code),
+            'battleInfo'  => $this->buildBattleInfo($battle, $instId),
+        ]);
+    }
+
+    private function buildBattleInfo(InstitutionBattle $battle, int $instId): array
+    {
+        return [
+            'quizTitle'       => $battle->quiz?->title ?? 'Untitled Quiz',
+            'subject'         => $battle->quiz?->subject ?? null,
+            'totalQuestions'  => $battle->total_questions,
+            'questionTimer'   => $battle->question_timer,
+            'playerCount'     => $battle->participants()->count(),
+            'hostInstitution' => optional($battle->institution)->name ?? 'Host',
+            'yourSchool'      => optional(Institution::find($instId))->name,
+        ];
+    }
+
+    public function startBattle(Request $request): JsonResponse
+    {
+        $request->validate(['code' => 'required|string']);
+
+        $battle = InstitutionBattle::where('code', $request->code)
+            ->where('created_by', Auth::id())
+            ->with(['quiz', 'participants'])
+            ->first();
+
+        if (!$battle) {
+            return response()->json(['success' => false, 'message' => 'Battle not found or not authorized.']);
         }
 
         if ($battle->status === 'in_progress') {
-            return response()->json(['success' => false, 'message' => 'Battle has already started.']);
-        }
-
-        $userId = Auth::id();
-
-        // Check capacity
-        $currentCount = $battle->participants()
-            ->where('institution_battle_participant_id', $instParticipant->id)
-            ->count();
-
-        if ($currentCount >= $battle->student_limit) {
-            return response()->json(['success' => false, 'message' => 'This institution\'s slots are full.']);
-        }
-
-        // Already joined?
-        $existing = $battle->participants()->where('user_id', $userId)->first();
-        if ($existing) {
             return response()->json([
                 'success'     => true,
                 'redirectUrl' => route('institution.battle.arena', $battle->code),
             ]);
         }
 
-        BattleParticipant::create([
-            'room_id'                          => null,
-            'inst_battle_id'                   => $battle->id,
-            'institution_id'                   => $instParticipant->institution_id,
-            'institution_battle_participant_id' => $instParticipant->id,
-            'user_id'                          => $userId,
-            'status'                           => 'joined',
-            'score'                            => 0,
+        if (!in_array($battle->status, ['setup', 'registration'])) {
+            return response()->json(['success' => false, 'message' => 'Cannot start this battle.']);
+        }
+
+        if ($battle->participants()->count() < 2) {
+            return response()->json(['success' => false, 'message' => 'Need at least 2 students to start.']);
+        }
+
+        if (!$battle->quiz || empty($battle->quiz->questions)) {
+            return response()->json(['success' => false, 'message' => 'Quiz has no questions.']);
+        }
+
+        $battle->update([
+            'status'              => 'countdown',
+            'countdown_starts_at' => now(),
         ]);
 
-        // Broadcast student joined
-        try {
-            broadcast(new \App\Events\InstitutionBattleStudentJoined(
-                $battle->code,
-                $battle->participants()->count(),
-                $instParticipant->id,
-                $instParticipant->participants()->count()
-            ));
-        } catch (\Throwable $e) {}
+        $this->startCountdown($battle);
 
         return response()->json([
             'success'     => true,
@@ -235,119 +448,110 @@ class InstitutionBattleController extends Controller
         ]);
     }
 
-    // ── Student joins page (GET) ───────────────────────────────────────────
-    public function joinPage(string $code = null)
-    {
-        $battle = null;
-        $myInstitution = null;
-        $joinError = null;
-
-        if ($code) {
-            $instParticipant = InstitutionBattleParticipant::where('student_code', strtoupper($code))->first();
-            if ($instParticipant) {
-                $battle = $instParticipant->battle;
-                $myInstitution = $instParticipant;
-                if ($battle && $battle->status === 'in_progress' && $battle->participants()->where('user_id', Auth::id())->exists()) {
-                    return redirect()->route('institution.battle.arena', $battle->code);
-                }
-            } else {
-                $joinError = 'Invalid institution code.';
-            }
-        }
-
-        return view('institution.battle.join', compact('battle', 'myInstitution', 'joinError'));
-    }
-
-    // ── Arena page ────────────────────────────────────────────────────────
+    /**
+     * Arena — routes to the correct view based on user role:
+     *   - Creator (host)         → institution.battle.arena  (isCreator=true, split-screen watcher)
+     *   - Institution admin 2/3  → institution.battle.arena  (isCreator=false, isObserverAdmin=true)
+     *   - Student participant     → student.battle.arena      (their own dashboard layout)
+     */
     public function arena(string $code)
     {
-        $user = Auth::user();
-        $room = InstitutionBattle::where('code', $code)
-            ->with(['quiz', 'institutionParticipants', 'participants.user'])
+        $user   = Auth::user();
+        $student = $user->student ?? null;
+
+        $battle = InstitutionBattle::where('code', $code)
+            ->with(['quiz', 'participants.user', 'participants.institution', 'creator', 'institution'])
             ->first();
 
-        if (!$room) {
+        if (!$battle) {
             return redirect()->route('institution.battle.join.page')->with('error', 'Battle not found.');
         }
 
-        if ($room->status === 'finished') {
-            return redirect()->route('institution.battle.results', $room->code);
+        if ($battle->isFinished()) {
+            return redirect()->route('institution.battle.results', $battle->code);
         }
 
-        $myParticipant = $room->participants()->where('user_id', Auth::id())->first();
-        $myInstitution = $myParticipant
-            ? $room->institutionParticipants->find($myParticipant->institution_battle_participant_id)
-            : null;
+        $isCreator       = ($battle->created_by === Auth::id());
+        $institution     = $this->resolveInstitution($user);
+        $isObserverAdmin = !$isCreator
+            && $institution
+            && in_array($institution->id, array_filter($battle->participating_institutions ?? []));
 
-        if (!$myParticipant) {
-            return redirect()->route('institution.battle.join.page')->with('error', 'You are not in this battle.');
+        // ── HOST: the user who created the battle
+        if ($isCreator) {
+            return view('institution.battle.arena', [
+                'battle'          => $battle,
+                'student'         => $student,
+                'user'            => $user,
+                'isCreator'       => true,
+                'isObserverAdmin' => false,
+            ]);
         }
 
-        return view('institution.battle.arena', compact('room', 'myInstitution', 'myParticipant'));
+        // ── OBSERVER ADMIN: institution admin for school 2 or 3
+        if ($isObserverAdmin) {
+            return view('institution.battle.arena', [
+                'battle'          => $battle,
+                'student'         => $student,
+                'user'            => $user,
+                'isCreator'       => false,
+                'isObserverAdmin' => true,
+            ]);
+        }
+
+        // ── STUDENT: must be a registered participant
+        if (!$battle->hasParticipant(Auth::id())) {
+            // Last-chance auto-join if battle still accepting
+            if (
+                $institution &&
+                in_array($institution->id, array_filter($battle->participating_institutions ?? [])) &&
+                in_array($battle->status, ['registration', 'countdown', 'in_progress'])
+            ) {
+                InstitutionBattleParticipant::firstOrCreate(
+                    ['battle_id' => $battle->id, 'user_id' => $user->id],
+                    ['institution_id' => $institution->id, 'status' => 'registered']
+                );
+                $battle->refresh();
+            } else {
+                return redirect()->route('institution.battle.join.page')
+                    ->with('error', 'You are not part of this battle. Please use your student code to join.');
+            }
+        }
+
+        // Route student to their own student arena view
+        return view('student.battle.instituionarena', [
+            'battle'          => $battle,
+            'student'         => $student,
+            'user'            => $user,
+            'isCreator'       => false,
+            'isObserverAdmin' => false,
+        ]);
     }
 
-    // ── Start Battle ──────────────────────────────────────────────────────
-    public function startBattle(Request $request): JsonResponse
-    {
-        $request->validate(['code' => 'required|string']);
-        $user        = Auth::user();
-        $institution = $user->institution;
-        $room = InstitutionBattle::where('code', $request->code)->first();
-
-        if (!$room || $room->host_institution_id !== $institution->id) {
-            return response()->json(['success' => false, 'message' => 'Not authorized.']);
-        }
-
-        if ($room->status !== 'waiting') {
-            return response()->json(['success' => false, 'message' => 'Battle cannot be started.']);
-        }
-
-        if ($room->participants()->count() < 2) {
-            return response()->json(['success' => false, 'message' => 'Need at least 2 students to start.']);
-        }
-
-        $room->update(['status' => 'in_progress', 'started_at' => now()]);
-        $room->participants()->update(['status' => 'playing']);
-
-        $questions = collect($room->quiz->questions)->map(fn($q) => [
-            'question' => $q['question'],
-            'options'  => $q['options'],
-            'topic'    => $q['topic'] ?? '',
-        ])->values()->all();
-
-        try {
-            broadcast(new \App\Events\InstitutionBattleStarted($room->code, $questions, $room->question_timer));
-        } catch (\Throwable $e) {}
-
-        return response()->json(['success' => true]);
-    }
-
-    // ── Submit Answer ─────────────────────────────────────────────────────
     public function submitAnswer(Request $request): JsonResponse
     {
         $request->validate([
-            'room_code'      => 'required|string',
+            'code'           => 'required|string',
             'question_index' => 'required|integer|min:0',
             'selected'       => 'required|integer|min:-1|max:3',
             'time_ms'        => 'required|integer|min:0',
         ]);
 
-        $room = InstitutionBattle::where('code', $request->room_code)
+        $battle = InstitutionBattle::where('code', $request->code)
             ->where('status', 'in_progress')
             ->with('quiz')
             ->first();
 
-        if (!$room) {
-            return response()->json(['success' => false, 'message' => 'Battle not found.']);
+        if (!$battle) {
+            return response()->json(['success' => false, 'message' => 'Battle not active.']);
         }
 
         $userId   = Auth::id();
         $qIdx     = $request->question_index;
         $selected = $request->selected;
-        $timeMs   = min($request->time_ms, $room->question_timer * 1000);
+        $timeMs   = min($request->time_ms, $battle->question_timer * 1000);
 
-        // Already answered?
-        if (BattleQuestionAnswer::where('inst_battle_id', $room->id)
+        if (InstitutionBattleQuestionAnswer::where('battle_id', $battle->id)
             ->where('user_id', $userId)
             ->where('question_index', $qIdx)
             ->exists()
@@ -355,27 +559,36 @@ class InstitutionBattleController extends Controller
             return response()->json(['success' => false, 'message' => 'Already answered.']);
         }
 
-        $questions = $room->quiz->questions ?? [];
+        $questions = $battle->quiz->questions ?? [];
         $q         = $questions[$qIdx] ?? null;
-        if (!$q) return response()->json(['success' => false, 'message' => 'Invalid question.']);
 
-        $isCorrect = ($selected === (int) $q['answer']);
-        $timeRatio = $timeMs > 0 ? (1 - ($timeMs / ($room->question_timer * 1000))) : 1;
-        $points    = $isCorrect ? max(20, (int) round(100 * $timeRatio)) : 0;
+        if (!$q) {
+            return response()->json(['success' => false, 'message' => 'Invalid question.']);
+        }
 
-        BattleQuestionAnswer::create([
-            'inst_battle_id'   => $room->id,
-            'room_id'          => null,
-            'user_id'          => $userId,
-            'question_index'   => $qIdx,
-            'selected_option'  => $selected,
-            'is_correct'       => $isCorrect,
-            'time_ms'          => $timeMs,
-            'points_earned'    => $points,
+        $correctAnswer = (int) $q['answer'];
+        $isCorrect     = ($selected === $correctAnswer);
+        $timeRatio     = $timeMs > 0 ? (1 - ($timeMs / ($battle->question_timer * 1000))) : 1;
+        $points        = $isCorrect ? max(20, (int) round(100 * $timeRatio)) : 0;
+
+        InstitutionBattleQuestionAnswer::create([
+            'battle_id'       => $battle->id,
+            'user_id'         => $userId,
+            'question_index'  => $qIdx,
+            'selected_option' => $selected,
+            'is_correct'      => $isCorrect,
+            'time_ms'         => $timeMs,
+            'points_earned'   => $points,
         ]);
 
-        $participant = $room->participants()->where('user_id', $userId)->lockForUpdate()->first();
-        if (!$participant) return response()->json(['success' => false, 'message' => 'Participant not found.']);
+        $participant = InstitutionBattleParticipant::where('battle_id', $battle->id)
+            ->where('user_id', $userId)
+            ->lockForUpdate()
+            ->first();
+
+        if (!$participant) {
+            return response()->json(['success' => false, 'message' => 'Participant not found.']);
+        }
 
         $newStreak = $isCorrect ? $participant->streak + 1 : 0;
         if ($isCorrect && $newStreak >= 3) $points += 20;
@@ -383,315 +596,448 @@ class InstitutionBattleController extends Controller
         $participant->update([
             'score'      => $participant->score + $points,
             'correct'    => $participant->correct + ($isCorrect ? 1 : 0),
-            'wrong'      => $participant->wrong   + ($isCorrect ? 0 : 1),
+            'wrong'      => $participant->wrong + ($isCorrect ? 0 : 1),
             'streak'     => $newStreak,
-            'max_streak' => max($participant->max_streak ?? 0, $newStreak),
+            'max_streak' => max($participant->max_streak, $newStreak),
         ]);
 
-        // Update institution total
-        $instParticipant = $room->institutionParticipants->find($participant->institution_battle_participant_id);
-        if ($instParticipant) {
-            $instTotal = $room->participants()
-                ->where('institution_battle_participant_id', $instParticipant->id)
-                ->sum('score');
-            $instParticipant->update(['total_score' => $instTotal]);
-        }
+        broadcast(new InstitutionAnswerSubmitted(
+            $battle->code,
+            $this->getLiveScores($battle),
+            $qIdx,
+            ['correct_option' => $correctAnswer, 'explanation' => $q['explanation'] ?? '']
+        ))->toOthers();
 
-        // Broadcast live scores
-        $scores = $this->getLiveScores($room);
-        try {
-            broadcast(new \App\Events\InstitutionBattleScoresUpdated($room->code, $scores, $qIdx, [
-                'correct_option' => (int) $q['answer'],
-                'explanation'    => $q['explanation'] ?? '',
-            ]));
-        } catch (\Throwable $e) {}
-
-        // Check if all answered
-        $this->checkAdvance($room, $qIdx);
+        $this->checkAdvanceQuestion($battle, $qIdx);
 
         return response()->json([
             'success'     => true,
             'isCorrect'   => $isCorrect,
             'points'      => $points,
             'streak'      => $newStreak,
-            'correct'     => (int) $q['answer'],
+            'correct'     => $correctAnswer,
             'explanation' => $q['explanation'] ?? '',
         ]);
     }
 
-    // ── Report Violation ──────────────────────────────────────────────────
     public function reportViolation(Request $request): JsonResponse
     {
-        $request->validate(['room_code' => 'required|string', 'type' => 'required|in:tab_switch,window_blur']);
+        $request->validate([
+            'code' => 'required|string',
+            'type' => 'required|in:tab_switch,window_blur',
+        ]);
 
-        $room = InstitutionBattle::where('code', $request->room_code)->where('status','in_progress')->first();
-        if (!$room) return response()->json(['success' => true, 'disqualified' => false]);
+        $battle = InstitutionBattle::where('code', $request->code)
+            ->where('status', 'in_progress')
+            ->first();
 
-        $participant = $room->participants()->where('user_id', Auth::id())->first();
-        if (!$participant || $participant->disqualified) {
-            return response()->json(['success' => true, 'disqualified' => (bool)($participant->disqualified ?? false)]);
+        if (!$battle) {
+            return response()->json(['success' => true, 'disqualified' => false]);
         }
 
-        $field = $request->type === 'tab_switch' ? 'tab_switches' : 'window_blurs';
-        $participant->increment($field);
+        $participant = InstitutionBattleParticipant::where('battle_id', $battle->id)
+            ->where('user_id', Auth::id())
+            ->first();
+
+        if (!$participant || $participant->disqualified) {
+            return response()->json([
+                'success'      => true,
+                'disqualified' => (bool) ($participant->disqualified ?? false),
+            ]);
+        }
+
+        $participant->incrementViolation($request->type);
         $participant->refresh();
 
-        $total = $participant->tab_switches + $participant->window_blurs;
-        $disq  = $total >= 3;
+        $totalViolations = $participant->tab_switches + $participant->window_blurs;
 
-        if ($disq) {
-            $participant->update(['disqualified' => true, 'status' => 'disqualified', 'score' => max(0, $participant->score - 50)]);
-        } elseif ($request->type === 'tab_switch') {
-            $participant->update(['score' => max(0, $participant->score - 10)]);
-        }
-
-        // Log violation
-        DB::table('battle_violations')->insert([
-            'battle_id'     => $room->id,
-            'user_id'       => Auth::id(),
-            'type'          => $request->type,
-            'violations'    => $total,
-            'disqualified'  => $disq,
-            'created_at'    => now(),
-        ]);
-
-        return response()->json(['success' => true, 'violations' => $total, 'disqualified' => $disq]);
-    }
-
-    // ── Force Next Question ───────────────────────────────────────────────
-    public function nextQuestion(Request $request): JsonResponse
-    {
-        $request->validate(['code' => 'required|string']);
-        $user        = Auth::user();
-        $institution = $user->institution;
-        $room = InstitutionBattle::where('code', $request->code)->first();
-
-        if (!$room || $room->host_institution_id !== $institution->id) {
-            return response()->json(['success' => false, 'message' => 'Not authorized.']);
-        }
-
-        $nextIdx = ($room->current_question ?? 0) + 1;
-        $room->update(['current_question' => $nextIdx]);
-
-        if ($nextIdx >= $room->total_questions) {
-            $this->finishBattle($room);
-        } else {
-            try {
-                broadcast(new \App\Events\InstitutionBattleNextQuestion($room->code, $nextIdx));
-            } catch (\Throwable $e) {}
-        }
-
-        return response()->json(['success' => true]);
-    }
-
-    // ── End Battle ────────────────────────────────────────────────────────
-    public function endBattle(Request $request): JsonResponse
-    {
-        $request->validate(['code' => 'required|string']);
-        $room = InstitutionBattle::where('code', $request->code)->first();
-        if (!$room) return response()->json(['success' => false, 'message' => 'Not found.']);
-
-        $this->finishBattle($room);
+        broadcast(new InstitutionBattleViolation(
+            $battle->code,
+            Auth::id(),
+            $request->type,
+            $participant->disqualified
+        ));
 
         return response()->json([
-            'success'    => true,
-            'resultsUrl' => route('institution.battle.results', $room->code),
+            'success'      => true,
+            'violations'   => $totalViolations,
+            'disqualified' => (bool) $participant->disqualified,
         ]);
     }
 
-    // ── Results ───────────────────────────────────────────────────────────
     public function results(string $code)
     {
-        $room = InstitutionBattle::where('code', $code)
-            ->with(['institutionParticipants', 'participants.user', 'quiz'])
+        $user    = Auth::user();
+        $student = $user->student ?? null;
+
+        $battle = InstitutionBattle::where('code', $code)
+            ->with(['participants.user', 'participants.institution', 'institution', 'quiz', 'creator'])
             ->first();
 
-        if (!$room) {
-            return redirect()->route('institution.dashboard');
+        if (!$battle) {
+            return redirect()->route('institution.battle.join.page')->with('error', 'Battle not found.');
         }
 
-        if ($room->status === 'in_progress') {
-            $this->finishBattle($room);
-            $room->refresh();
+        if ($battle->status === 'in_progress') {
+            $this->finishBattle($battle);
+            $battle->refresh();
         }
 
-        $room->winner_institution = $room->institutionParticipants
-            ->sortByDesc('total_score')
-            ->first();
+        $myParticipant       = $battle->participants->firstWhere('user_id', Auth::id());
+        $institutionRankings = $battle->institution_rankings ?? $battle->getInstitutionRankings();
 
-        return view('institution.battle.results', compact('room'));
+        $isCreator       = ($battle->created_by === Auth::id());
+        $institution     = $this->resolveInstitution($user);
+        $isObserverAdmin = !$isCreator
+            && $institution
+            && in_array($institution->id, array_filter($battle->participating_institutions ?? []));
+
+        // HOST or OBSERVER ADMIN → institution results page
+        if ($isCreator || $isObserverAdmin) {
+            $myInst = $this->resolveInstitution(Auth::user());
+
+            return view('institution.battle.result', compact(
+                'battle',
+                'myParticipant',
+                'institutionRankings',
+                'student',
+                'user',
+                'myInst'
+            ));
+        }
+
+        // STUDENT → their own results page (student.battle.results untouched)
+        return view('student.battle.instituion-result', compact(
+            'battle',
+            'myParticipant',
+            'institutionRankings',
+            'student',
+            'user'
+        ));
     }
 
-    // ── Arena State Poll ──────────────────────────────────────────────────
     public function arenaState(string $code): JsonResponse
     {
-        $room = InstitutionBattle::where('code', $code)
-            ->with(['institutionParticipants', 'participants.user'])
+        $battle = InstitutionBattle::where('code', $code)
+            ->with(['participants.user', 'participants.institution'])
             ->first();
 
-        if (!$room) return response()->json(['success' => false]);
-
-        return response()->json([
-            'success'          => true,
-            'status'           => $room->status,
-            'scores'           => $this->getLiveScores($room),
-            'current_question' => $room->current_question ?? 0,
-            'active_count'     => $room->participants()->where('status','playing')->count(),
-            'total_count'      => $room->participants()->count(),
-            'answered_count'   => BattleQuestionAnswer::where('inst_battle_id',$room->id)->where('question_index',$room->current_question??0)->count(),
-        ]);
-    }
-
-    // ── Manage State Poll ─────────────────────────────────────────────────
-    public function manageState(string $code): JsonResponse
-    {
-        $room = InstitutionBattle::where('code', $code)->with(['institutionParticipants','participants'])->first();
-        if (!$room) return response()->json(['success' => false]);
-
-        return response()->json([
-            'success'          => true,
-            'status'           => $room->status,
-            'scores'           => $this->getLiveScores($room),
-            'active_count'     => $room->participants()->where('status','playing')->count(),
-            'total_count'      => $room->participants()->count(),
-            'current_question' => $room->current_question ?? 0,
-            'answered_count'   => BattleQuestionAnswer::where('inst_battle_id',$room->id)->where('question_index',$room->current_question??0)->count(),
-        ]);
-    }
-
-    // ── Rematch ───────────────────────────────────────────────────────────
-    public function rematch(Request $request): JsonResponse
-    {
-        $request->validate(['code' => 'required|string']);
-        $old  = InstitutionBattle::where('code', $request->code)->first();
-        if (!$old) return response()->json(['success' => false, 'message' => 'Not found.']);
-
-        DB::beginTransaction();
-        try {
-            $new = InstitutionBattle::create([
-                'code'                => $this->generateCode(),
-                'host_institution_id' => $old->host_institution_id,
-                'quiz_id'             => $old->quiz_id,
-                'status'              => 'waiting',
-                'institution_count'   => $old->institution_count,
-                'student_limit'       => $old->student_limit,
-                'question_timer'      => $old->question_timer,
-                'total_questions'     => $old->total_questions,
-                'anti_cheat'          => $old->anti_cheat,
-            ]);
-
-            foreach ($old->institutionParticipants as $ip) {
-                InstitutionBattleParticipant::create([
-                    'battle_id'      => $new->id,
-                    'institution_id' => $ip->institution_id,
-                    'name'           => $ip->name,
-                    'student_code'   => $this->generateStudentCode(),
-                    'is_host'        => $ip->is_host,
-                    'total_score'    => 0,
-                ]);
-            }
-
-            DB::commit();
-            return response()->json(['success' => true, 'redirectUrl' => route('institution.battle.manage', $new->code)]);
-        } catch (\Throwable $e) {
-            DB::rollBack();
-            return response()->json(['success' => false, 'message' => $e->getMessage()]);
+        if (!$battle) {
+            return response()->json(['success' => false]);
         }
+
+        return response()->json([
+            'success'           => true,
+            'status'            => $battle->status,
+            'scores'            => $this->getLiveScores($battle),
+            'institutionScores' => $battle->getInstitutionRankings(),
+        ]);
     }
 
-    // ══════════════════════════════════════════════════════════════════════
-    // Private Helpers
-    // ══════════════════════════════════════════════════════════════════════
-
-    private function getLiveScores(InstitutionBattle $room): array
+    public function lobbyState(string $code): JsonResponse
     {
-        return $room->institutionParticipants->map(function ($ip) use ($room) {
-            $students = $room->participants()
-                ->where('institution_battle_participant_id', $ip->id)
-                ->with('user')
-                ->get()
-                ->sortByDesc('score')
-                ->values();
+        $battle = InstitutionBattle::where('code', $code)
+            ->with(['participants.user', 'participants.institution', 'institution', 'quiz'])
+            ->first();
 
-            return [
-                'institution_id' => $ip->id,
-                'name'           => $ip->name,
-                'total_score'    => $students->sum('score'),
-                'student_count'  => $students->count(),
-                'students'       => $students->take(10)->map(fn($p) => [
+        if (!$battle) {
+            return response()->json(['success' => false]);
+        }
+
+        $participating = $battle->participating_institutions ?? [];
+        $totalSlots    = $battle->battle_type === '3school' ? 3 : 2;
+
+        $schools = [];
+        for ($i = 0; $i < $totalSlots; $i++) {
+            $instId   = $participating[$i] ?? null;
+            $inst     = $instId ? Institution::find($instId) : null;
+            $students = $battle->participants
+                ->where('institution_id', $instId)
+                ->values()
+                ->map(fn($p) => [
                     'user_id' => $p->user_id,
                     'name'    => $p->user->name,
-                    'score'   => $p->score,
-                    'correct' => $p->correct,
-                    'streak'  => $p->streak,
-                ])->values()->all(),
+                    'status'  => $p->status,
+                    'avatar'  => strtoupper(substr($p->user->name, 0, 1)),
+                ])->all();
+
+            $schools[] = [
+                'slot'         => $i + 1,
+                'institution'  => $inst ? ['id' => $inst->id, 'name' => $inst->name] : null,
+                'joined'       => (bool) $instId,
+                'studentCode'  => $instId ? $battle->studentCodeForSlot($i + 1) : null,
+                'students'     => $students,
+                'studentCount' => count($students),
             ];
-        })->sortByDesc('total_score')->values()->all();
+        }
+
+        return response()->json([
+            'success'        => true,
+            'status'         => $battle->status,
+            'totalStudents'  => $battle->participants->count(),
+            'battleType'     => $battle->battle_type,
+            'hostInst'       => optional($battle->institution)->name,
+            'schools'        => $schools,
+            'inviteCodes'    => $this->buildInviteCodes($battle),
+        ]);
     }
 
-    private function checkAdvance(InstitutionBattle $room, int $qIdx): void
+    private function buildInviteCodes(InstitutionBattle $battle): array
     {
-        $total    = $room->participants()->where('disqualified', false)->count();
-        $answered = BattleQuestionAnswer::where('inst_battle_id', $room->id)->where('question_index', $qIdx)->count();
+        $codes      = [];
+        $suffixes   = InstitutionBattle::institutionSubSuffixes();
+        $totalSlots = $battle->battle_type === '3school' ? 3 : 2;
 
-        if ($answered >= $total) {
-            $nextIdx = $qIdx + 1;
-            $room->update(['current_question' => $nextIdx]);
-            if ($nextIdx >= $room->total_questions) {
-                $this->finishBattle($room);
+        for ($i = 0; $i < $totalSlots - 1; $i++) {
+            $codes[] = [
+                'slot'   => $i + 2,
+                'code'   => $battle->code . '-' . $suffixes[$i],
+                'suffix' => $suffixes[$i],
+            ];
+        }
+
+        return $codes;
+    }
+
+    public function history()
+    {
+        $user        = Auth::user();
+        $institution = $this->resolveInstitution($user);
+
+        if (!$institution) {
+            return redirect()->route('institution.dashboard')
+                ->with('error', 'No institution found for your account.');
+        }
+
+        $histories = \App\Models\InstitutionBattleHistory::where('institution_id', $institution->id)
+            ->with(['battle.quiz', 'battle.institution'])
+            ->latest()
+            ->paginate(15);
+
+        // Summary stats
+        $allHistory  = \App\Models\InstitutionBattleHistory::where('institution_id', $institution->id)->get();
+        $totalPlayed = $allHistory->count();
+        $totalWins   = $allHistory->where('rank', 1)->count();
+        $totalLosses = $totalPlayed - $totalWins;
+        $winRate     = $totalPlayed > 0 ? round(($totalWins / $totalPlayed) * 100) : 0;
+        $avgAccuracy = $totalPlayed > 0 ? round($allHistory->avg('average_accuracy')) : 0;
+        $avgScore    = $totalPlayed > 0 ? round($allHistory->avg('total_score')) : 0;
+        $bestRank1   = $allHistory->where('rank', 1)->count();
+
+        // Best battle (highest total_score)
+        $bestBattle = $allHistory->sortByDesc('total_score')->first();
+
+        $summaryStats = [
+            'total_played' => $totalPlayed,
+            'total_wins'   => $totalWins,
+            'total_losses' => $totalLosses,
+            'win_rate'     => $winRate,
+            'avg_accuracy' => $avgAccuracy,
+            'avg_score'    => $avgScore,
+            'best_score'   => $allHistory->max('total_score') ?? 0,
+        ];
+
+        return view('institution.battle.history', compact(
+            'user',
+            'institution',
+            'histories',
+            'summaryStats',
+            'bestBattle'
+        ));
+    }
+
+    // ─── Private helpers ──────────────────────────────────────────────────────
+
+    private function resolveInstitution($user): ?Institution
+    {
+        return $user->institution
+            ?? ($user->institution_id ? Institution::find($user->institution_id) : null)
+            ?? Institution::where('user_id', $user->id)->first();
+    }
+
+    private function getLiveScores(InstitutionBattle $battle): array
+    {
+        return InstitutionBattleParticipant::where('battle_id', $battle->id)
+            ->with(['user', 'institution'])
+            ->get()
+            ->map(fn($p) => [
+                'user_id'          => $p->user_id,
+                'name'             => $p->user->name,
+                'institution_id'   => $p->institution_id,
+                'institution_name' => optional($p->institution)->name ?? 'Unknown',
+                'score'            => $p->score,
+                'correct'          => $p->correct,
+                'streak'           => $p->streak,
+                'disqualified'     => (bool) $p->disqualified,
+                'avatar'           => strtoupper(substr($p->user->name, 0, 1)),
+            ])
+            ->sortByDesc('score')
+            ->values()
+            ->all();
+    }
+
+    private function startCountdown(InstitutionBattle $battle): void
+    {
+        $countdownSeconds = 5;
+
+        for ($i = $countdownSeconds; $i > 0; $i--) {
+            broadcast(new InstitutionBattleCountdownUpdated($battle->code, $i));
+            sleep(1);
+        }
+
+        $battle->update([
+            'status'     => 'in_progress',
+            'started_at' => now(),
+        ]);
+
+        $battle->participants()->update(['status' => 'playing']);
+
+        $questions = collect($battle->quiz->questions)->map(fn($q) => [
+            'question' => $q['question'],
+            'options'  => $q['options'],
+            'topic'    => $q['topic'] ?? '',
+        ])->values()->all();
+
+        broadcast(new InstitutionBattleStarted(
+            $battle->code,
+            $questions,
+            $battle->question_timer,
+            0
+        ));
+    }
+
+    private function checkAdvanceQuestion(InstitutionBattle $battle, int $qIdx): void
+    {
+        $totalPlayers = InstitutionBattleParticipant::where('battle_id', $battle->id)
+            ->where('disqualified', false)
+            ->count();
+
+        $answeredCount = InstitutionBattleQuestionAnswer::where('battle_id', $battle->id)
+            ->where('question_index', $qIdx)
+            ->count();
+
+        if ($answeredCount >= $totalPlayers) {
+            if ($qIdx + 1 >= $battle->total_questions) {
+                $this->finishBattle($battle);
             } else {
-                try {
-                    broadcast(new \App\Events\InstitutionBattleNextQuestion($room->code, $nextIdx));
-                } catch (\Throwable $e) {}
+                broadcast(new InstitutionNextQuestion($battle->code, $qIdx + 1));
             }
         }
     }
 
-    private function finishBattle(InstitutionBattle $room): void
+    private function finishBattle(InstitutionBattle $battle): void
     {
-        if ($room->status === 'finished') return;
+        if ($battle->isFinished()) return;
 
-        $total = max(1, $room->total_questions);
-        $participants = $room->participants()->with('user')->get();
+        $participants = $battle->participants()->with(['user', 'institution'])->get();
+        $total        = max(1, $battle->total_questions);
 
-        foreach ($participants as $p) {
-            $acc = (int) round(($p->correct / $total) * 100);
-            $xp  = $p->score + ($acc >= 80 ? 40 : 0);
-            $p->update(['xp_earned' => $xp, 'status' => 'finished', 'time_taken' => max(0, (int) now()->diffInSeconds($room->started_at))]);
-        }
+        $participants->each(function ($p) use ($battle, $total) {
+            $accuracy  = (int) round(($p->correct / $total) * 100);
+            $xp        = $p->score + ($accuracy >= 80 ? 40 : 0);
+            $timeTaken = $battle->started_at
+                ? (int) max(0, now()->diffInSeconds($battle->started_at, false))
+                : 0;
 
-        // Update institution totals
-        foreach ($room->institutionParticipants as $ip) {
-            $total_score = $room->participants()->where('institution_battle_participant_id', $ip->id)->sum('score');
-            $ip->update(['total_score' => $total_score]);
-        }
+            $p->update([
+                'xp_earned'   => $xp,
+                'status'      => 'finished',
+                'time_taken'  => $timeTaken,
+                'finished_at' => now(),
+            ]);
 
-        $winner = $room->institutionParticipants->sortByDesc('total_score')->first();
+            QuizResult::create([
+                'user_id'    => $p->user_id,
+                'quiz_id'    => $battle->quiz_id,
+                'type'       => 'institution_battle',
+                'score'      => $p->correct,
+                'total_q'    => $total,
+                'accuracy'   => $accuracy,
+                'xp_earned'  => $xp,
+                'time_taken' => $timeTaken,
+                'subject'    => $battle->quiz->subject ?? null,
+                'metadata'   => json_encode([
+                    'battle_code'      => $battle->code,
+                    'institution_name' => optional($p->institution)->name,
+                    'rank'             => null,
+                ]),
+            ]);
+        });
 
-        $finalScores = $this->getLiveScores($room);
-        $room->update([
-            'status'         => 'finished',
-            'finished_at'    => now(),
-            'final_scores'   => $finalScores,
-            'winner_inst_id' => $winner?->id,
+        $finalScores = $participants->sortByDesc('score')
+            ->map(fn($p) => [
+                'user_id'          => $p->user_id,
+                'name'             => $p->user->name,
+                'institution_id'   => $p->institution_id,
+                'institution_name' => optional($p->institution)->name,
+                'score'            => $p->score,
+                'correct'          => $p->correct,
+                'wrong'            => $p->wrong,
+                'streak'           => $p->max_streak,
+                'xp'               => $p->xp_earned,
+                'accuracy'         => (int) round(($p->correct / $total) * 100),
+                'disqualified'     => (bool) $p->disqualified,
+            ])
+            ->values()
+            ->all();
+
+        $institutionRankings = $battle->getInstitutionRankings();
+
+        $battle->update([
+            'status'               => 'finished',
+            'finished_at'          => now(),
+            'final_scores'         => $finalScores,
+            'institution_rankings' => $institutionRankings,
+            'top_students'         => array_slice($finalScores, 0, 10),
         ]);
 
-        try {
-            broadcast(new \App\Events\InstitutionBattleFinished($room->code, $finalScores, $winner?->name));
-        } catch (\Throwable $e) {}
+        foreach (collect($battle->participating_institutions)->filter() as $instId) {
+            $instParticipants = $participants->where('institution_id', $instId);
+            $rank = collect($institutionRankings)->search(fn($r) => $r['institution_id'] == $instId);
+
+            InstitutionBattleHistory::create([
+                'institution_id'     => $instId,
+                'battle_id'          => $battle->id,
+                'total_participants' => $instParticipants->count(),
+                'total_correct'      => $instParticipants->sum('correct'),
+                'total_wrong'        => $instParticipants->sum('wrong'),
+                'total_score'        => $instParticipants->sum('score'),
+                'average_accuracy'   => $instParticipants->count()
+                    ? (int) round($instParticipants->avg(fn($p) => ($p->correct + $p->wrong) > 0
+                        ? ($p->correct / ($p->correct + $p->wrong)) * 100
+                        : 0))
+                    : 0,
+                'average_time'       => (int) ($instParticipants->avg('time_taken') ?? 0),
+                'rank'               => $rank !== false ? $rank + 1 : null,
+            ]);
+        }
+
+        broadcast(new InstitutionBattleFinished(
+            $battle->code,
+            $finalScores,
+            $institutionRankings,
+            array_slice($finalScores, 0, 10)
+        ));
     }
 
-    private function generateCode(): string
+    private function broadcastLobby(InstitutionBattle $battle): void
     {
-        do { $code = 'IB' . strtoupper(Str::random(6)); }
-        while (InstitutionBattle::where('code', $code)->exists());
-        return $code;
-    }
+        $battle->loadMissing(['participants.user', 'participants.institution']);
 
-    private function generateStudentCode(): string
-    {
-        do { $code = strtoupper(Str::random(8)); }
-        while (InstitutionBattleParticipant::where('student_code', $code)->exists());
-        return $code;
+        $participants = $battle->participants->map(fn($p) => [
+            'id'               => $p->user_id,
+            'user_id'          => $p->user_id,
+            'name'             => $p->user->name,
+            'institution_id'   => $p->institution_id,
+            'institution_name' => optional($p->institution)->name,
+            'status'           => $p->status,
+        ])->all();
+
+        broadcast(new InstitutionBattleLobbyUpdated(
+            $battle->code,
+            $participants,
+            $battle->status,
+            count($participants)
+        ));
     }
 }

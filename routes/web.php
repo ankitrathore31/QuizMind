@@ -5,6 +5,7 @@ use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\AIQuizController;
 use App\Http\Controllers\MyQuizHistoryController;
 use App\Http\Controllers\BattleController;
+use App\Http\Controllers\CertificateController;
 use App\Http\Controllers\InstitutionBattleController;
 use App\Http\Controllers\InstitutionController;
 use App\Http\Controllers\InstitutionCodeController;
@@ -16,9 +17,29 @@ Route::get('/', function () {
     return view('welcome');
 })->name('home');
 
-Route::get('/student/dashboard',  [StudentController::class, 'dashboard'])->middleware('auth')->name('student.dashboard');
-Route::post('/profile/setup', [StudentController::class, 'saveProfile'])->name('student.profile.save');
-Route::get('/stats', [StudentController::class, 'stats'])->name('student.stats');
+Route::middleware(['auth'])->group(function () {
+
+    Route::get('/student/dashboard', [StudentController::class, 'dashboard'])
+        ->name('student.dashboard');
+
+    Route::get('/student/profile/setup', [StudentController::class, 'profileSetupPage'])
+        ->name('student.profile.setup');
+
+    Route::get('/student/profile', [StudentController::class, 'profilePage'])
+        ->name('student.profile');
+
+    Route::post('/student/profile/save', [StudentController::class, 'saveProfile'])
+        ->name('student.profile.save');
+
+    Route::get('/student/stats', [StudentController::class, 'stats'])
+        ->name('student.stats');
+
+    Route::get('/student/account/delete', [StudentController::class, 'deleteAccountPage'])
+        ->name('student.account.delete.page');
+
+    Route::delete('/student/account/delete', [StudentController::class, 'deleteAccount'])
+        ->name('student.account.delete');
+});
 Route::middleware('auth')->group(function () {
     Route::get('/profile', [ProfileController::class, 'edit'])->name('profile.edit');
     Route::patch('/profile', [ProfileController::class, 'update'])->name('profile.update');
@@ -29,10 +50,8 @@ Route::get('/auth/google',          [AuthenticatedSessionController::class, 'red
 Route::get('/auth/google/callback', [AuthenticatedSessionController::class, 'handleGoogleCallback'])->name('auth.google.callback');
 Route::prefix('student/quiz')->middleware(['auth'])->name('student.quiz.')->group(function () {
 
-    // ── Main page ──────────────────────────────────────────────────────────
     Route::get('/',                    [AIQuizController::class, 'index'])->name('index');
 
-    // ── Tutor Chat (MUST be before /{quiz} wildcard) ───────────────────────
     Route::get('/tutor',               [AIQuizController::class, 'tutorIndex'])->name('tutor.index');
     Route::post('/tutor/chat',         [AIQuizController::class, 'tutorChat'])->name('tutor.chat');
     Route::post('/tutor/new',          [AIQuizController::class, 'tutorNewSession'])->name('tutor.new');
@@ -40,20 +59,16 @@ Route::prefix('student/quiz')->middleware(['auth'])->name('student.quiz.')->grou
     Route::get('/tutor/session/{id}',  [AIQuizController::class, 'tutorSession'])->name('tutor.session');
     Route::delete('/tutor/session/{id}', [AIQuizController::class, 'tutorDeleteSession'])->name('tutor.session.delete');
 
-    // ── Generators ────────────────────────────────────────────────────────
     Route::post('/generate/topic',     [AIQuizController::class, 'generateTopic'])->name('generate.topic');
     Route::post('/generate/pdf',       [AIQuizController::class, 'generatePdf'])->name('generate.pdf');
     Route::post('/generate/image',     [AIQuizController::class, 'generateImage'])->name('generate.image');
     Route::post('/generate/standard',  [AIQuizController::class, 'generateStandard'])->name('generate.standard');
 
-    // ── Manual & Solo ─────────────────────────────────────────────────────
     Route::post('/manual/save',        [AIQuizController::class, 'saveManual'])->name('manual.save');
     Route::post('/submit/solo',        [AIQuizController::class, 'submitSolo'])->name('submit.solo');
 
-    // ── Suggestions ───────────────────────────────────────────────────────
     Route::get('/suggestions',         [AIQuizController::class, 'suggestions'])->name('suggestions');
 
-    // ── Delete quiz (wildcard — MUST be last) ─────────────────────────────
     Route::delete('/{quiz}',           [AIQuizController::class, 'destroy'])->name('destroy');
 });
 Route::post('/student/quiz/tutor/gen-quiz', [AIQuizController::class, 'tutorGenQuiz'])
@@ -61,7 +76,6 @@ Route::post('/student/quiz/tutor/gen-quiz', [AIQuizController::class, 'tutorGenQ
 
 Route::prefix('student')->middleware(['auth'])->group(function () {
 
-    // ── My Quiz History ────────────────────────────────────────────────────
     Route::get('/history',                        [MyQuizHistoryController::class, 'index'])->name('student.history.index');
     Route::delete('/history/result/{id}',         [MyQuizHistoryController::class, 'deleteResult'])->name('student.history.result.delete');
     Route::delete('/history/quiz/{id}',           [MyQuizHistoryController::class, 'deleteQuiz'])->name('student.history.quiz.delete');
@@ -113,23 +127,18 @@ Route::middleware(['auth', 'verified'])
     ->name('institution.')
     ->group(function () {
 
-        // ✅ Dashboard page
         Route::get('/dashboard', [InstitutionController::class, 'index'])
             ->name('dashboard');
 
-        // ✅ Students PAGE
         Route::get('/students', [InstitutionController::class, 'studentsPage'])
             ->name('students');
 
-        // ✅ Students DATA (AJAX)
         Route::get('/students/data', [InstitutionController::class, 'students'])
             ->name('students.data');
 
-        // ✅ Settings PAGE
         Route::get('/settings', [InstitutionController::class, 'settingsPage'])
             ->name('settings');
 
-        // ✅ Update settings
         Route::put('/settings', [InstitutionController::class, 'updateSettings'])
             ->name('settings.update');
     });
@@ -151,26 +160,36 @@ Route::middleware(['auth'])->prefix('institution-code')->name('institution.code.
         ->name('join');
 });
 
-Route::middleware('auth')
-    ->prefix('institution')
-    ->name('institution.')
-    ->group(function () {
+Route::middleware(['auth'])->prefix('institution')->name('institution.')->group(function () {
 
-        // Battle management (host only)
-        Route::prefix('battle')->name('battle.')->group(function () {
-            Route::post('/index',        [InstitutionBattleController::class, 'createBattle'])->name('index');
-            Route::post('/create',        [InstitutionBattleController::class, 'createBattle'])->name('create');
-            Route::get('/manage/{code}',  [InstitutionBattleController::class, 'manage'])->name('manage');
-            Route::get('/results/{code}', [InstitutionBattleController::class, 'results'])->name('results');
+    Route::get('battle/setup', [InstitutionBattleController::class, 'setup'])->name('battle.setup');
+    Route::post('battle/create', [InstitutionBattleController::class, 'createBattle'])->name('battle.create');
 
-            Route::post('/start',         [InstitutionBattleController::class, 'startBattle'])->name('start');
-            Route::post('/next-question', [InstitutionBattleController::class, 'nextQuestion'])->name('next-question');
-            Route::post('/end',           [InstitutionBattleController::class, 'endBattle'])->name('end');
-            Route::post('/rematch',       [InstitutionBattleController::class, 'rematch'])->name('rematch');
+    Route::get('battle/setup-page/{code}', [InstitutionBattleController::class, 'setupPage'])->name('battle.setup-page');
+    Route::get('battle/lobby-state/{code}', [InstitutionBattleController::class, 'lobbyState'])->name('battle.lobby-state');
 
-            // Host state polling
-            Route::get('/state/{code}',       [InstitutionBattleController::class, 'manageState'])->name('state');
-        });
-    });
+    Route::post('battle/start-registration/{code}', [InstitutionBattleController::class, 'startRegistration'])->name('battle.start-registration');
+    Route::post('battle/start', [InstitutionBattleController::class, 'startBattle'])->name('battle.start');
+
+    Route::get('battle/join-page', [InstitutionBattleController::class, 'institutionJoinPage'])->name('battle.join.page');
+    Route::post('battle/lookup', [InstitutionBattleController::class, 'lookupBattle'])->name('battle.lookup');        // NEW
+    Route::post('battle/join', [InstitutionBattleController::class, 'institutionJoin'])->name('battle.inst.join');
+
+    Route::post('battle/join-arena', [InstitutionBattleController::class, 'joinBattle'])->name('battle.join.post');
+
+    Route::get('battle/arena/{code}', [InstitutionBattleController::class, 'arena'])->name('battle.arena');
+    Route::get('battle/arena-state/{code}', [InstitutionBattleController::class, 'arenaState'])->name('battle.arena-state');
+
+    Route::post('battle/answer', [InstitutionBattleController::class, 'submitAnswer'])->name('battle.answer');
+    Route::post('battle/violation', [InstitutionBattleController::class, 'reportViolation'])->name('battle.violation');
+
+    Route::get('battle/results/{code}', [InstitutionBattleController::class, 'results'])->name('battle.results');
+    Route::get('battle/history', [InstitutionBattleController::class, 'history'])->name('battle.history');
+});
+
+Route::prefix('student')->name('student.')->middleware(['auth', 'verified'])->group(function () {
+    Route::get('/certificates',        [CertificateController::class, 'index'])->name('certificates');
+    Route::get('/certificates/{id}',   [CertificateController::class, 'show'])->name('certificates.show');
+});
 
 require __DIR__ . '/auth.php';

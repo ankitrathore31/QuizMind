@@ -524,12 +524,17 @@
             flex-shrink: 0
         }
 
+        /* FIX: team tag now shows team name text — allow wrap on very long names */
         .sr-tag {
             font-size: .56rem;
-            padding: 1px 4px;
+            padding: 2px 5px;
             border-radius: 3px;
             font-weight: 700;
-            flex-shrink: 0
+            flex-shrink: 0;
+            max-width: 60px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap
         }
 
         .tag-a {
@@ -762,11 +767,15 @@
                         <div class="sr {{ $p->user_id === Auth::id() ? 'me' : '' }}" id="sr-{{ $p->user_id }}">
                             <span class="sr-rank">#{{ $loop->iteration }}</span>
                             <div class="sr-av">{{ strtoupper(substr($p->user->name, 0, 1)) }}</div>
+                            {{-- FIX: show actual team name instead of just A/B letter --}}
                             @if ($room->mode === 'team')
-                                <span
-                                    class="sr-tag {{ $p->team === 'a' ? 'tag-a' : 'tag-b' }}">{{ strtoupper($p->team ?? '?') }}</span>
+                                <span class="sr-tag {{ $p->team === 'a' ? 'tag-a' : 'tag-b' }}"
+                                    title="{{ $p->team === 'a' ? $room->team_a_name : $room->team_b_name }}">
+                                    {{ $p->team === 'a' ? $room->team_a_name : $room->team_b_name }}
+                                </span>
                             @endif
-                            <span class="sr-nm">{{ $p->user->name }}{{ $p->user_id === $room->host_id ? ' 👑' : '' }}</span>
+                            <span
+                                class="sr-nm">{{ $p->user->name }}{{ $p->user_id === $room->host_id ? ' 👑' : '' }}</span>
                             <span class="sr-pts" id="pts-{{ $p->user_id }}">0</span>
                         </div>
                     @endforeach
@@ -835,7 +844,6 @@
             running: false,
             done: false,
             wsWorked: false,
-            // FIX: track whether battle start has already been handled
             startHandled: false,
         };
 
@@ -845,7 +853,7 @@
         @if ($room->status === 'in_progress')
             S.qs = @json(collect($room->quiz->questions ?? [])->map(fn($q) => ['question' => $q['question'], 'options' => $q['options'], 'topic' => $q['topic'] ?? ''])->values());
             S.running = true;
-            S.startHandled = true; // FIX: mark as already started so WS battle.started won't re-trigger countdown
+            S.startHandled = true;
             const _answered = {{ $room->answers()->where('user_id', Auth::id())->count() }};
             document.addEventListener('DOMContentLoaded', () => {
                 showQ(Math.min(_answered, S.qs.length - 1));
@@ -869,7 +877,7 @@
                 });
             ch = pusher.subscribe(`battle.${CFG.roomCode}`);
 
-            // FIX: guard against double-start — only run countdown once
+            // Guard against double-start
             ch.bind('battle.started', data => {
                 if (S.startHandled) return;
                 S.startHandled = true;
@@ -880,11 +888,17 @@
                 showCountdown(() => showQ(0));
             });
 
+            // FIX: answer.submitted now reveals correct answer for ALL players (group/team mode)
             ch.bind('answer.submitted', data => {
                 S.wsWorked = true;
                 updateBoard(data.scores);
-                if (!S.answered && data.questionIndex === S.qIdx) {
-                    revealAnswer(data.correctInfo.correct_option, -1, false, data.correctInfo.explanation);
+                // Show correct answer highlight to everyone watching this question
+                if (data.questionIndex === S.qIdx) {
+                    if (!S.answered) {
+                        // We haven't answered yet — show green highlight only (no red for us)
+                        revealAnswer(data.correctInfo.correct_option, -1, null, data.correctInfo.explanation);
+                    }
+                    // If we already answered, our own doSubmit() already called revealAnswer — skip
                 }
             });
 
@@ -900,7 +914,6 @@
                 endBattle();
             });
 
-            // FIX: corrected broken string — was `d ',' var (--red)` which is a syntax error
             ch.bind('violation', data => {
                 if (data.userId !== CFG.myId && data.disqualified) floatFX('⛔ Player DQ\'d', 'var(--red)');
             });
@@ -908,7 +921,6 @@
         } catch (e) {
             console.warn('WS init failed', e);
         }
-        // FIX: poll/question functions are now properly OUTSIDE the try/catch block
 
         // ═══════════════════════════════════════════════════════
         // POLL FALLBACK
@@ -1007,7 +1019,9 @@
         function drawTimer(t) {
             const pct = Math.max(0, t / CFG.qTimer);
             const off = 157 * (1 - pct);
-            const fill = g('tcFill'), num = g('tcNum'), bar = g('timerBar');
+            const fill = g('tcFill'),
+                num = g('tcNum'),
+                bar = g('timerBar');
             if (fill) {
                 fill.style.strokeDashoffset = off;
                 fill.style.stroke = pct > .5 ? 'var(--accent)' : pct > .25 ? 'orange' : 'var(--red)';
@@ -1069,6 +1083,7 @@
                 if (d.success) {
                     S.myScore += (d.points || 0);
                     g('myPts').textContent = S.myScore;
+                    // FIX: pass isCorrect as boolean — will show red/green for our own answer
                     revealAnswer(d.correct, idx, d.isCorrect, d.explanation);
 
                     if (d.isCorrect) {
@@ -1122,6 +1137,8 @@
 
         // ═══════════════════════════════════════════════════════
         // REVEAL ANSWER
+        // FIX: isCorrect === null means "someone else answered — show green only, no red for us"
+        //      isCorrect === true/false means we answered — show our result
         // ═══════════════════════════════════════════════════════
         function revealAnswer(correctIdx, selectedIdx, isCorrect, explanation) {
             for (let i = 0; i < 4; i++) {
@@ -1129,28 +1146,34 @@
                 if (!b) continue;
                 b.classList.remove('selected');
                 b.disabled = true;
-                if (i === correctIdx) b.classList.add('correct');
-                else if (i === selectedIdx && !isCorrect) b.classList.add('wrong');
+                if (i === correctIdx) {
+                    b.classList.add('correct');
+                } else if (selectedIdx >= 0 && i === selectedIdx && isCorrect === false) {
+                    b.classList.add('wrong');
+                }
             }
-            if (isCorrect !== null && isCorrect !== undefined && selectedIdx >= 0) {
-                const cls = isCorrect ? 'fb-ok' : 'fb-bad';
-                const title = isCorrect ? `✅ Correct!` : `❌ Wrong! Correct: ${LETTERS[correctIdx]}`;
-                showFB(cls, title, explanation || '');
+            // Show feedback text only for our own answer
+            if (isCorrect === true) {
+                showFB('fb-ok', '✅ Correct!', explanation || '');
+            } else if (isCorrect === false) {
+                showFB('fb-bad', `❌ Wrong! Correct: ${LETTERS[correctIdx]}`, explanation || '');
             }
+            // isCorrect === null → just highlight correct option silently (someone else answered)
         }
 
         // ═══════════════════════════════════════════════════════
         // NEXT QUESTION BAR
         // ═══════════════════════════════════════════════════════
         function schedNext() {
-            const bar = g('nextBar'), fill = g('nbFill'), sec = g('nbSecs');
+            const bar = g('nextBar'),
+                fill = g('nbFill'),
+                sec = g('nbSecs');
             if (!bar) return;
             bar.classList.add('show');
             let t = 3.0;
             if (fill) fill.style.width = '100%';
             if (sec) sec.textContent = 3;
 
-            // FIX: capture current qIdx so the timeout comparison is valid
             const capturedIdx = S.qIdx;
 
             S.nTick = setInterval(() => {
@@ -1161,14 +1184,11 @@
                     clearNextBar();
                     const wsConnected = pusher && pusher.connection && pusher.connection.state === 'connected';
                     if (!S.wsWorked || !wsConnected) {
-                        // No WS — advance locally
                         const next = S.qIdx + 1;
                         if (next < S.qs.length) showQ(next);
                         else endBattle();
                     } else {
-                        // WS connected — give it 600ms to fire next.question, then advance as safety net
                         setTimeout(() => {
-                            // FIX: compare against capturedIdx, not S.qIdx === S.qIdx (always true)
                             if (S.qIdx === capturedIdx && !S.done) {
                                 const next = S.qIdx + 1;
                                 if (next < S.qs.length) showQ(next);
@@ -1210,7 +1230,8 @@
             if (!scores || !scores.length) return;
             const list = g('scoreList');
             scores.forEach((s, rank) => {
-                const row = g(`sr-${s.user_id}`), pts = g(`pts-${s.user_id}`);
+                const row = g(`sr-${s.user_id}`),
+                    pts = g(`pts-${s.user_id}`);
                 if (!row || !pts) return;
                 const prev = parseInt(pts.textContent) || 0;
                 if (s.score !== prev) animNum(pts, prev, s.score);
@@ -1234,7 +1255,8 @@
         }
 
         function animNum(el, from, to) {
-            const d = 350, s = performance.now();
+            const d = 350,
+                s = performance.now();
             const f = n => {
                 const p = Math.min((n - s) / d, 1);
                 el.textContent = Math.round(from + (to - from) * p);
@@ -1256,15 +1278,24 @@
             g('qPanel').style.display = 'none';
             g('finishedPanel').style.display = 'flex';
             snd('victory');
-            if (typeof confetti === 'function') confetti({ particleCount: 120, spread: 70, origin: { y: .5 } });
-            setTimeout(() => { window.location.href = R.results; }, 3500);
+            if (typeof confetti === 'function') confetti({
+                particleCount: 120,
+                spread: 70,
+                origin: {
+                    y: .5
+                }
+            });
+            setTimeout(() => {
+                window.location.href = R.results;
+            }, 3500);
         }
 
         // ═══════════════════════════════════════════════════════
         // COUNTDOWN
         // ═══════════════════════════════════════════════════════
         function showCountdown(cb) {
-            const ov = g('cdOverlay'), num = g('cdNum');
+            const ov = g('cdOverlay'),
+                num = g('cdNum');
             ov.classList.add('show');
             let n = 3;
             num.textContent = n;
@@ -1273,9 +1304,8 @@
                 n--;
                 if (n > 0) {
                     num.textContent = n;
-                    // FIX: re-trigger animation so each number animates in
                     num.style.animation = 'none';
-                    num.offsetHeight; // reflow
+                    num.offsetHeight;
                     num.style.animation = '';
                     snd('beep');
                 } else {
@@ -1312,7 +1342,10 @@
                         'X-CSRF-TOKEN': CFG.csrf,
                         'X-Requested-With': 'XMLHttpRequest'
                     },
-                    body: JSON.stringify({ room_code: CFG.roomCode, type }),
+                    body: JSON.stringify({
+                        room_code: CFG.roomCode,
+                        type
+                    }),
                 });
                 const d = await r.json();
                 if (d.disqualified) {
@@ -1320,7 +1353,8 @@
                     clearTimer();
                 }
                 g('vioMsg').textContent = type === 'tab_switch' ? 'Tab switch detected!' : 'Window minimized!';
-                g('vioDetail').textContent = d.disqualified ? '⛔ You are disqualified.' : `Warning ${d.violations}/3 · −10 pts`;
+                g('vioDetail').textContent = d.disqualified ? '⛔ You are disqualified.' :
+                    `Warning ${d.violations}/3 · −10 pts`;
                 g('vioOverlay').classList.add('show');
                 snd('vio');
             } catch (e) {}
@@ -1342,52 +1376,89 @@
 
         function snd(name) {
             try {
-                const ac = getAC(), t = ac.currentTime;
+                const ac = getAC(),
+                    t = ac.currentTime;
                 const tone = (f, d, tp = 'sine', v = .25) => {
-                    const o = ac.createOscillator(), g = ac.createGain();
-                    o.connect(g); g.connect(ac.destination);
-                    o.type = tp; o.frequency.value = f;
+                    const o = ac.createOscillator(),
+                        g = ac.createGain();
+                    o.connect(g);
+                    g.connect(ac.destination);
+                    o.type = tp;
+                    o.frequency.value = f;
                     g.gain.setValueAtTime(v, t);
                     g.gain.exponentialRampToValueAtTime(.001, t + d);
-                    o.start(t); o.stop(t + d + .01);
+                    o.start(t);
+                    o.stop(t + d + .01);
                 };
                 switch (name) {
-                    case 'tick':    tone(880, .08, 'triangle', .06); break;
-                    case 'urgent':  tone(660, .07, 'square', .12); break;
-                    case 'beep':    tone(1047, .12, 'sine', .3); break;
-                    case 'timeout': tone(220, .4, 'triangle', .15); break;
-                    case 'vio':     tone(150, .5, 'square', .18); break;
+                    case 'tick':
+                        tone(880, .08, 'triangle', .06);
+                        break;
+                    case 'urgent':
+                        tone(660, .07, 'square', .12);
+                        break;
+                    case 'beep':
+                        tone(1047, .12, 'sine', .3);
+                        break;
+                    case 'timeout':
+                        tone(220, .4, 'triangle', .15);
+                        break;
+                    case 'vio':
+                        tone(150, .5, 'square', .18);
+                        break;
                     case 'correct':
-                        [[523,.18],[659,.18],[784,.18],[1047,.3]].forEach(([f,d],i) => {
-                            const o = ac.createOscillator(), gg = ac.createGain();
-                            o.connect(gg); gg.connect(ac.destination);
-                            o.type = 'sine'; o.frequency.value = f;
+                        [
+                            [523, .18],
+                            [659, .18],
+                            [784, .18],
+                            [1047, .3]
+                        ].forEach(([f, d], i) => {
+                            const o = ac.createOscillator(),
+                                gg = ac.createGain();
+                            o.connect(gg);
+                            gg.connect(ac.destination);
+                            o.type = 'sine';
+                            o.frequency.value = f;
                             const st = t + i * .11;
                             gg.gain.setValueAtTime(.25, st);
                             gg.gain.exponentialRampToValueAtTime(.001, st + d);
-                            o.start(st); o.stop(st + d + .01);
+                            o.start(st);
+                            o.stop(st + d + .01);
                         });
                         break;
                     case 'wrong': {
-                        const o = ac.createOscillator(), gg = ac.createGain();
-                        o.connect(gg); gg.connect(ac.destination);
+                        const o = ac.createOscillator(),
+                            gg = ac.createGain();
+                        o.connect(gg);
+                        gg.connect(ac.destination);
                         o.type = 'sawtooth';
                         o.frequency.setValueAtTime(280, t);
                         o.frequency.exponentialRampToValueAtTime(160, t + .3);
                         gg.gain.setValueAtTime(.18, t);
                         gg.gain.exponentialRampToValueAtTime(.001, t + .3);
-                        o.start(t); o.stop(t + .32);
+                        o.start(t);
+                        o.stop(t + .32);
                         break;
                     }
                     case 'victory':
-                        [[523,.25],[659,.25],[784,.25],[1047,.35],[1319,.5]].forEach(([f,d],i) => {
-                            const o = ac.createOscillator(), gg = ac.createGain();
-                            o.connect(gg); gg.connect(ac.destination);
-                            o.type = 'sine'; o.frequency.value = f;
+                        [
+                            [523, .25],
+                            [659, .25],
+                            [784, .25],
+                            [1047, .35],
+                            [1319, .5]
+                        ].forEach(([f, d], i) => {
+                            const o = ac.createOscillator(),
+                                gg = ac.createGain();
+                            o.connect(gg);
+                            gg.connect(ac.destination);
+                            o.type = 'sine';
+                            o.frequency.value = f;
                             const st = t + i * .13;
                             gg.gain.setValueAtTime(.3, st);
                             gg.gain.exponentialRampToValueAtTime(.001, st + d);
-                            o.start(st); o.stop(st + d + .01);
+                            o.start(st);
+                            o.stop(st + d + .01);
                         });
                         break;
                 }
@@ -1400,15 +1471,32 @@
         const cvs = document.getElementById('fxCanvas');
         const cx = cvs.getContext('2d');
         let pts2 = [];
-        (() => { cvs.width = innerWidth; cvs.height = innerHeight; })();
-        window.addEventListener('resize', () => { cvs.width = innerWidth; cvs.height = innerHeight; });
+        (() => {
+            cvs.width = innerWidth;
+            cvs.height = innerHeight;
+        })();
+        window.addEventListener('resize', () => {
+            cvs.width = innerWidth;
+            cvs.height = innerHeight;
+        });
 
         function spawnParts(btn, color) {
             if (!btn) return;
-            const r = btn.getBoundingClientRect(), bx = r.left + r.width / 2, by = r.top + r.height / 2;
+            const r = btn.getBoundingClientRect(),
+                bx = r.left + r.width / 2,
+                by = r.top + r.height / 2;
             for (let i = 0; i < 20; i++) {
-                const a = (Math.PI * 2 / 20) * i + (Math.random() - .5) * .5, sp = 2 + Math.random() * 5;
-                pts2.push({ x: bx, y: by, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 1, r: 3 + Math.random() * 4, a: 1, color });
+                const a = (Math.PI * 2 / 20) * i + (Math.random() - .5) * .5,
+                    sp = 2 + Math.random() * 5;
+                pts2.push({
+                    x: bx,
+                    y: by,
+                    vx: Math.cos(a) * sp,
+                    vy: Math.sin(a) * sp - 1,
+                    r: 3 + Math.random() * 4,
+                    a: 1,
+                    color
+                });
             }
             if (!looping2) loop2();
         }
@@ -1419,12 +1507,23 @@
             cx.clearRect(0, 0, cvs.width, cvs.height);
             pts2 = pts2.filter(p => p.a > .02);
             pts2.forEach(p => {
-                p.x += p.vx; p.y += p.vy; p.vy += .18; p.a -= .03;
-                cx.save(); cx.globalAlpha = p.a; cx.fillStyle = p.color;
-                cx.beginPath(); cx.arc(p.x, p.y, p.r, 0, Math.PI * 2); cx.fill(); cx.restore();
+                p.x += p.vx;
+                p.y += p.vy;
+                p.vy += .18;
+                p.a -= .03;
+                cx.save();
+                cx.globalAlpha = p.a;
+                cx.fillStyle = p.color;
+                cx.beginPath();
+                cx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+                cx.fill();
+                cx.restore();
             });
             if (pts2.length) requestAnimationFrame(loop2);
-            else { looping2 = false; cx.clearRect(0, 0, cvs.width, cvs.height); }
+            else {
+                looping2 = false;
+                cx.clearRect(0, 0, cvs.width, cvs.height);
+            }
         }
 
         // ═══════════════════════════════════════════════════════
@@ -1444,7 +1543,9 @@
         // ═══════════════════════════════════════════════════════
         // UTILS
         // ═══════════════════════════════════════════════════════
-        function g(id) { return document.getElementById(id); }
+        function g(id) {
+            return document.getElementById(id);
+        }
 
         function esc(s) {
             return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');

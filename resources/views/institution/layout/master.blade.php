@@ -689,7 +689,7 @@
                     </li>
 
                     <li>
-                        <a href="{{-- route('institution.battles') --}}"
+                        <a href="{{ route('institution.battle.join.page') }}"
                             class="nav-link {{ request()->routeIs('institution.battles') ? 'active' : '' }}">
                             <span class="nav-icon">⚔️</span>
                             <span>Battle Arena</span>
@@ -697,7 +697,7 @@
                     </li>
 
                     <li>
-                        <a href="{{-- route('institution.history') --}}"
+                        <a href="{{ route('institution.battle.history') }}"
                             class="nav-link {{ request()->routeIs('institution.history') ? 'active' : '' }}">
                             <span class="nav-icon">📜</span>
                             <span>History</span>

@@ -16,9 +16,7 @@
 </head>
 
 <style>
-    /* ═══════════════════════════════════
-   RESET & BASE
-═══════════════════════════════════ */
+    
     *,
     *::before,
     *::after {
@@ -360,6 +358,8 @@
             <a href="{{ route('student.quiz.tutor.index') }}" class="nav-link">💬 Tutor</a>
             <a href="{{ route('student.battle.join.page') }}" class="nav-link">⚔️ Battles</a>
             <a href="{{ route('student.history.index') }}" class="nav-link">📚 History</a>
+            <a href="{{ route('student.certificates') }}" class="nav-link">📜 Certificate</a>
+
         </div>
 
         {{-- RIGHT: XP + streak + avatar --}}
@@ -377,7 +377,7 @@
                 </div>
 
                 <div class="profile-menu" id="profileMenu">
-                    <a href="#">⚙️ Settings</a>
+                    <a href="{{ route('student.profile')}}">⚙️ Settings</a>
 
                     <form method="POST" action="{{ route('logout') }}">
                         @csrf

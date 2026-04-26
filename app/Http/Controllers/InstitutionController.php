@@ -10,20 +10,60 @@ use Illuminate\Support\Facades\Auth;
 
 class InstitutionController extends Controller
 {
-    // ── DASHBOARD PAGE ────────────────────────────────────────────
+
+
     public function index()
     {
         $user        = Auth::user();
         $institution = Institution::where('user_id', $user->id)->firstOrFail();
         $students    = $this->getStudentsWithStats($institution);
 
+        // Pull battle history for this institution
+        $battleHistory = \App\Models\InstitutionBattleHistory::where('institution_id', $institution->id)
+            ->with(['battle.quiz', 'battle'])
+            ->latest()
+            ->get();
+
         return view('institution.dashboard', [
-            'user'        => $user,
-            'institution' => $institution,
-            'students'    => $students,
-            'topStudents' => $students->sortByDesc('total_quizzes')->take(5)->values(),
-            'stats'       => $this->getStats($institution, $students),
+            'user'          => $user,
+            'institution'   => $institution,
+            'students'      => $students,
+            'topStudents'   => $students->sortByDesc('total_quizzes')->take(5)->values(),
+            'stats'         => $this->getStats($institution, $students, $battleHistory),
+            'battleHistory' => $battleHistory,
         ]);
+    }
+
+    private function getStats(Institution $institution, $students, $battleHistory = null): array
+    {
+        // Load battle history if not passed
+        if ($battleHistory === null) {
+            $battleHistory = \App\Models\InstitutionBattleHistory::where('institution_id', $institution->id)->get();
+        }
+
+        $totalBattles = $battleHistory->count();
+        $battleWins   = $battleHistory->where('rank', 1)->count();
+        $battleLosses = $totalBattles - $battleWins;
+
+        return [
+            'total_students' => $students->count(),
+            'total_quizzes'  => $students->sum('total_quizzes'),
+            'total_correct'  => $students->sum('total_correct'),
+            'total_wrong'    => $students->sum('total_wrong'),
+
+            // Real battle data from InstitutionBattleHistory
+            'total_battle'   => $totalBattles,
+            'battle_wins'    => $battleWins,
+            'battle_losses'  => $battleLosses,
+
+            'avg_accuracy'   => $students->count()
+                ? round($students->avg('accuracy'))
+                : 0,
+
+            'top_student_name' => $students->first()?->display_name
+                ?? $students->first()?->user->name
+                ?? '—',
+        ];
     }
 
     // ── STUDENTS PAGE (NEW) ───────────────────────────────────────
@@ -134,7 +174,7 @@ class InstitutionController extends Controller
             });
     }
 
-    private function getStats(Institution $institution, $students): array
+    private function getStatsOld(Institution $institution, $students): array
     {
         return [
             'total_students' => $students->count(),

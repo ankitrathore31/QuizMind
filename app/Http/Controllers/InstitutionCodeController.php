@@ -10,13 +10,7 @@ use Illuminate\Support\Facades\Auth;
 
 class InstitutionCodeController extends Controller
 {
-    // ────────────────────────────────────────────────────────────────
-    // Called from TWO places:
-    //   1. Registration form  (guest)  — saves code to new user
-    //   2. Student dashboard  (auth)   — student joins later
-    // ────────────────────────────────────────────────────────────────
-
-    // AJAX: validate a code before the student submits (instant feedback)
+    
     public function validate(Request $request): JsonResponse
     {
         $code = strtoupper(trim($request->input('code', '')));
@@ -70,7 +64,6 @@ class InstitutionCodeController extends Controller
             ]);
         }
 
-        // Save code to user — this is the only link needed
         $user->update(['ref_code' => $code]);
 
         return response()->json([
@@ -80,8 +73,4 @@ class InstitutionCodeController extends Controller
         ]);
     }
 
-    // POST: called during registration to pre-validate before user is created
-    // Your RegisteredUserController should call Institution::where('code', $ref_code) check
-    // then pass ref_code into User::create(['ref_code' => $ref_code])
-    // This helper is for the live validation only.
 }

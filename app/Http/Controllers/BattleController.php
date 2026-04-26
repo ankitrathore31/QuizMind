@@ -157,8 +157,87 @@ class BattleController extends Controller
         return response()->json(['success' => true, 'rooms' => $rooms]);
     }
 
+    public function JoinPage(Request $request, string $code = null, string $team = null)
+    {
+        $user    = Auth::user();
+        $student = $user->student ?? $user->getOrCreateStudent();
+
+        // ── Institution code from query string (?inst=…) ──────────────────────
+        // The institution tab uses its OWN POST route (institution.battle.join.post).
+        // Here we just pass the pre-filled code to the view so JS can auto-submit.
+        $instCode = $request->query('inst');   // null when not present
+
+        // ── No normal room code → return blank hub (all three tabs available) ──
+        if (!$code) {
+            return view('student.battle.join', [
+                'room'            => null,
+                'alreadyJoined'   => false,
+                'preselectedTeam' => null,
+                'joinError'       => session('error'),
+                'instCode'        => $instCode,   // may be null
+                'student'         => $student,
+                'user'            => $user,
+            ]);
+        }
+
+        // ── Normal battle: look up the room by code ────────────────────────────
+        $room = BattleRoom::where('code', strtoupper($code))
+            ->with(['host', 'quiz', 'participants.user'])
+            ->first();
+
+        // Room not found
+        if (!$room) {
+            return view('student.battle.join', [
+                'room'            => null,
+                'alreadyJoined'   => false,
+                'preselectedTeam' => null,
+                'joinError'       => "Room code \"{$code}\" not found or has already ended.",
+                'instCode'        => $instCode,
+                'student'         => $student,
+                'user'            => $user,
+            ]);
+        }
+
+        // Room finished → redirect to results
+        if ($room->status === 'finished') {
+            return redirect()->route('student.battle.results', $room->code);
+        }
+
+        // Room in progress
+        if ($room->status === 'in_progress') {
+            // Already a participant → drop into arena
+            if ($room->hasParticipant(Auth::id())) {
+                return redirect()->route('student.battle.arena', $room->code);
+            }
+            // Not a participant → show error on hub
+            return view('student.battle.join', [
+                'room'            => null,
+                'alreadyJoined'   => false,
+                'preselectedTeam' => null,
+                'joinError'       => 'This battle has already started.',
+                'instCode'        => $instCode,
+                'student'         => $student,
+                'user'            => $user,
+            ]);
+        }
+
+        // Room is waiting → show the pre-filled invite card
+        $alreadyJoined   = $room->hasParticipant(Auth::id());
+        $preselectedTeam = $team;
+
+        return view('student.battle.join', [
+            'room'            => $room,
+            'alreadyJoined'   => $alreadyJoined,
+            'preselectedTeam' => $preselectedTeam,
+            'joinError'       => null,
+            'instCode'        => $instCode,   // usually null unless someone combined both params
+            'student'         => $student,
+            'user'            => $user,
+        ]);
+    }
+
     // ── 3. Join page (GET) ─────────────────────────────────────────────────
-    public function joinPage(string $code = null, string $team = null)
+    public function joinPageOld(string $code = null, string $team = null)
     {
         $user    = Auth::user();
         $student = $user->getOrCreateStudent();

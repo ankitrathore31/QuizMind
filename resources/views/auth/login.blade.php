@@ -1,9 +1,6 @@
 @extends('layouts.app')
-
-@section('title', 'QuizMind AI — Login or Sign Up')
-
 @section('content')
-
+    
     <div class="auth-page">
 
         {{-- Animated background grid --}}
@@ -286,7 +283,7 @@
                                     </div>
                                 </div>
 
-                                <div class="field" id="field-reg-college">
+                                {{-- <div class="field" id="field-reg-college">
                                     <label class="field-label" for="reg-college">College / School <span
                                             class="opt-tag">optional</span></label>
                                     <div class="field-inner">
@@ -299,7 +296,7 @@
                                             placeholder="Your institution name" value="{{ old('college') }}"
                                             autocomplete="organization">
                                     </div>
-                                </div>
+                                </div> --}}
                             </div>
 
                             {{-- Role picker --}}
@@ -361,11 +358,7 @@
 
 @push('styles')
     <style>
-        /* ══════════════════════════════════════════════
-       AUTH PAGE — Full redesign
-    ══════════════════════════════════════════════ */
-
-        /* ── Page shell ──────────────────────────────── */
+       
         .auth-page {
             min-height: 100vh;
             background: var(--dark);

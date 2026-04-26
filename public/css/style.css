@@ -602,7 +602,7 @@ footer {
 @media (max-width: 768px) {
   .grid-2, .grid-3 { grid-template-columns: 1fr; }
   .grid-4 { grid-template-columns: 1fr 1fr; }
-  .qm-navbar { overflow-x: auto; padding: 0 16px; gap: 4px; }
+  /* .qm-navbar { overflow-x: auto; padding: 0 16px; gap: 4px; } */
   .page { padding: 20px 16px 50px; }
   .hero-stats { gap: 20px; }
 }

@@ -606,8 +606,8 @@
 
         <div class="stat-card sc-cyan fade-up delay-2">
             <div class="stat-icon-wrap">✅</div>
-            <div class="stat-val" data-count="{{ $stats['total_correct'] ?? 0 }}">0</div>
-            <div class="stat-label">Correct Answers</div>
+            <div class="stat-val" data-count="{{ $stats['total_battle'] ?? 0 }}">0</div>
+            <div class="stat-label">Total Battle </div>
             <span class="stat-delta delta-up">↑ +12%</span>
         </div>
 
@@ -807,9 +807,8 @@
 
     </div>
 
-@endsection
 
-@push('scripts')
+
     <script>
         // ── Count-up Animation ──
         document.querySelectorAll('.stat-val[data-count]').forEach(el => {
@@ -840,4 +839,4 @@
             }
         }, 400);
     </script>
-@endpush
+@endsection

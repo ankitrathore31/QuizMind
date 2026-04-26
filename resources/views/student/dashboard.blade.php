@@ -314,33 +314,6 @@
                     @endforeach
                 </div>
 
-                {{-- Quick Actions --}}
-                {{-- <div class="mt-20">
-                    <div class="section-title mb-12">⚡ Quick Actions</div>
-                    <div class="quick-actions">
-                        <a href="{{ route('student.quiz.index') }}" class="qa-card qa-quiz reveal reveal-delay-1">
-                            <span class="qa-icon">📚</span>
-                            <div class="qa-title">Solo Quiz</div>
-                            <div class="qa-desc">Practice any subject at your own pace</div>
-                        </a>
-                        <a href="#" class="qa-card qa-battle reveal reveal-delay-2">
-                            <span class="qa-icon">⚔️</span>
-                            <div class="qa-title">1v1 Battle</div>
-                            <div class="qa-desc">Challenge another student in real-time</div>
-                        </a>
-                        <a href="#" class="qa-card qa-team reveal reveal-delay-3">
-                            <span class="qa-icon">👥</span>
-                            <div class="qa-title">Team Battle</div>
-                            <div class="qa-desc">Join or create a team vs team room</div>
-                        </a>
-                        <a href="#" class="qa-card qa-ai reveal reveal-delay-4">
-                            <span class="qa-icon">🤖</span>
-                            <div class="qa-title">AI Practice</div>
-                            <div class="qa-desc">Let AI generate a custom quiz for you</div>
-                        </a>
-                    </div>
-                </div> --}}
-
                 {{-- Badges --}} <br>
                 <div class="card mt-20 reveal">
                     <div class="section-hd">

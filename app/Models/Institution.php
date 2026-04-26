@@ -37,6 +37,11 @@ class Institution extends Model
         return $this->belongsTo(User::class);
     }
 
+    public function users()
+    {
+        return $this->hasMany(User::class);
+    }
+
     // All users who typed this institution's code in their ref_code field
     // users.ref_code = institutions.code
     public function affiliatedUsers()
@@ -53,7 +58,7 @@ class Institution extends Model
     {
         return Student::whereHas('user', function ($q) {
             $q->where('ref_code', $this->code)
-              ->where('role', 'student');
+                ->where('role', 'student');
         })->with('user')->get();
     }
 
