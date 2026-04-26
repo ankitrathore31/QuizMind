@@ -2,7 +2,6 @@
 
 use App\Http\Controllers\Auth\AuthenticatedSessionController;
 use App\Http\Controllers\ProfileController;
-use App\Http\Controllers\AIQuizController;
 use App\Http\Controllers\MyQuizHistoryController;
 use App\Http\Controllers\BattleController;
 use App\Http\Controllers\CertificateController;
@@ -10,6 +9,7 @@ use App\Http\Controllers\InstitutionBattleController;
 use App\Http\Controllers\InstitutionController;
 use App\Http\Controllers\InstitutionCodeController;
 use App\Http\Controllers\InstitutionQuizController;
+use App\Http\Controllers\QuizController;
 use App\Http\Controllers\StudentController;
 use Illuminate\Support\Facades\Route;
 
@@ -50,28 +50,28 @@ Route::get('/auth/google',          [AuthenticatedSessionController::class, 'red
 Route::get('/auth/google/callback', [AuthenticatedSessionController::class, 'handleGoogleCallback'])->name('auth.google.callback');
 Route::prefix('student/quiz')->middleware(['auth'])->name('student.quiz.')->group(function () {
 
-    Route::get('/',                    [AIQuizController::class, 'index'])->name('index');
+    Route::get('/',                    [QuizController::class, 'index'])->name('index');
 
-    Route::get('/tutor',               [AIQuizController::class, 'tutorIndex'])->name('tutor.index');
-    Route::post('/tutor/chat',         [AIQuizController::class, 'tutorChat'])->name('tutor.chat');
-    Route::post('/tutor/new',          [AIQuizController::class, 'tutorNewSession'])->name('tutor.new');
-    Route::get('/tutor/sessions',      [AIQuizController::class, 'tutorSessions'])->name('tutor.sessions');
-    Route::get('/tutor/session/{id}',  [AIQuizController::class, 'tutorSession'])->name('tutor.session');
-    Route::delete('/tutor/session/{id}', [AIQuizController::class, 'tutorDeleteSession'])->name('tutor.session.delete');
+    Route::get('/tutor',               [QuizController::class, 'tutorIndex'])->name('tutor.index');
+    Route::post('/tutor/chat',         [QuizController::class, 'tutorChat'])->name('tutor.chat');
+    Route::post('/tutor/new',          [QuizController::class, 'tutorNewSession'])->name('tutor.new');
+    Route::get('/tutor/sessions',      [QuizController::class, 'tutorSessions'])->name('tutor.sessions');
+    Route::get('/tutor/session/{id}',  [QuizController::class, 'tutorSession'])->name('tutor.session');
+    Route::delete('/tutor/session/{id}', [QuizController::class, 'tutorDeleteSession'])->name('tutor.session.delete');
 
-    Route::post('/generate/topic',     [AIQuizController::class, 'generateTopic'])->name('generate.topic');
-    Route::post('/generate/pdf',       [AIQuizController::class, 'generatePdf'])->name('generate.pdf');
-    Route::post('/generate/image',     [AIQuizController::class, 'generateImage'])->name('generate.image');
-    Route::post('/generate/standard',  [AIQuizController::class, 'generateStandard'])->name('generate.standard');
+    Route::post('/generate/topic',     [QuizController::class, 'generateTopic'])->name('generate.topic');
+    Route::post('/generate/pdf',       [QuizController::class, 'generatePdf'])->name('generate.pdf');
+    Route::post('/generate/image',     [QuizController::class, 'generateImage'])->name('generate.image');
+    Route::post('/generate/standard',  [QuizController::class, 'generateStandard'])->name('generate.standard');
 
-    Route::post('/manual/save',        [AIQuizController::class, 'saveManual'])->name('manual.save');
-    Route::post('/submit/solo',        [AIQuizController::class, 'submitSolo'])->name('submit.solo');
+    Route::post('/manual/save',        [QuizController::class, 'saveManual'])->name('manual.save');
+    Route::post('/submit/solo',        [QuizController::class, 'submitSolo'])->name('submit.solo');
 
-    Route::get('/suggestions',         [AIQuizController::class, 'suggestions'])->name('suggestions');
+    Route::get('/suggestions',         [QuizController::class, 'suggestions'])->name('suggestions');
 
-    Route::delete('/{quiz}',           [AIQuizController::class, 'destroy'])->name('destroy');
+    Route::delete('/{quiz}',           [QuizController::class, 'destroy'])->name('destroy');
 });
-Route::post('/student/quiz/tutor/gen-quiz', [AIQuizController::class, 'tutorGenQuiz'])
+Route::post('/student/quiz/tutor/gen-quiz', [QuizController::class, 'tutorGenQuiz'])
     ->name('student.quiz.tutor.gen_quiz');
 
 Route::prefix('student')->middleware(['auth'])->group(function () {
